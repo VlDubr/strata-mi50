@@ -1,10 +1,12 @@
 # Strata for AMD Instinct MI50 / MI60
 
-**Source version: Strata v0.1.42 / `61b3fb5d`** (deployed T5810 text engine `build-text-rocm10/strata` =
-v0.1.42, SHA256 `0550f3f2…`, installed 2026-10-11; the previous 0.1.40.1
-artifact `bc1102ba…` is kept beside it as `strata-v0.1.40.1`; the vision encoder is unchanged at
-`709fc4d2…`). The 8082 service runs this v0.1.42 pair; the owner starts it manually, and a read-only
-`GET /metrics` at 2026-10-11 01:06:34 UTC reports engine `0.1.42` with the production IQ3_S settings.
+**Source version: Strata v0.1.43 / `7695859a`** (merged into `gfx906` on 2026-10-11; not deployed).
+The deployed T5810 text engine `build-text-rocm10/strata` is the **v0.1.42 / `61b3fb5d`** merge build
+with this fork's conversation-copy fix on top: SHA256 `ff24e50b…`, installed 2026-10-11 04:02 UTC. The
+v0.1.42 artifact `0550f3f2…` is kept beside it as `strata.v0142-0550f3f2.bak`, the earlier **v0.1.40.1**
+artifact `bc1102ba…` as `strata-v0.1.40.1`, and the vision encoder is unchanged at `709fc4d2…`. The 8082
+service runs that pair; the owner starts it manually, and a read-only `GET /metrics` at 2026-10-11
+01:06:34 UTC reports engine `0.1.42` with the production IQ3_S settings.
 
 **Key features in this release:**
 - **Concurrent execution:** Multi-slot concurrent request batching and decoding across independent context sequences.
@@ -116,7 +118,7 @@ the figures quoted here are the `--batch-groups 2` configuration, which is what 
 - Single-GPU inference and experimental multi-GPU **contiguous-layer / pipeline splitting**. This is not tensor parallelism.
 - CPU/GPU hybrid expert execution and speculative decoding with the supported MTP setup.
 
-This is not a general claim that every feature or model in upstream Strata is available on gfx906. The HTTP server serializes requests by default; configured batch slots can decode concurrently. This fork adds an experimental Linux gfx906 HIP image encoder (`--experimental-gfx906 --vision gpu`) alongside upstream's CPU encoder. It expands BF16 vision weights losslessly to FP32 in memory; see [the measured scope and activation-arithmetic limits](docs/GFX906.md#experimental-hip-vision-on-v0139) before enabling it. The [current T5810 deployment](docs/GFX906.md#single-request-live-traffic-on-the-deployed-v0142-engine-read-only-metrics-2026-10-11-010109010634-utc) is the upstream gfx906 text engine built from the **v0.1.42 / `61b3fb5d`** merge (`7f104978`) for **ROCm 10** (`build-text-rocm10/strata`, `0550f3f2…`, installed 2026-10-11; the previous validated **v0.1.40.1 / `82f46a8`** artifact `bc1102ba…` with engine fix `74583c6` is kept beside it as `strata-v0.1.40.1`) plus this fork's HIP GPU vision encoder (`709fc4d2…`, unchanged). Accepted scopes ([independent audit receipt](docs/gfx906-results/20261007-rocm10-context-cache/README.md), validated on the `bc1102ba…` artifact): four-slot pipeline/2-group ~32K-token parity with slot-cache reuse, 65K-token solo parking/reuse, 36K-token HTTP bursts, and Web CORS support. The 8082 service runs the v0.1.42 pair; the owner starts it manually. A read-only `GET /metrics` at 2026-10-11 01:06:34 UTC reports engine `0.1.42` with the production IQ3_S settings (4 batch slots, `--batch-groups 2`, `--kv int8 --kv-resident 32768`, `--spec 4`, `pcie_frac 0.00`).
+This is not a general claim that every feature or model in upstream Strata is available on gfx906. The HTTP server serializes requests by default; configured batch slots can decode concurrently. This fork adds an experimental Linux gfx906 HIP image encoder (`--experimental-gfx906 --vision gpu`) alongside upstream's CPU encoder. It expands BF16 vision weights losslessly to FP32 in memory; see [the measured scope and activation-arithmetic limits](docs/GFX906.md#experimental-hip-vision-on-v0139) before enabling it. The [current T5810 deployment](docs/GFX906.md#single-request-live-traffic-on-the-deployed-v0142-engine-read-only-metrics-2026-10-11-010109010634-utc) is the upstream gfx906 text engine built from the **v0.1.42 / `61b3fb5d`** merge (`7f104978`) with this fork's conversation-copy fix on top, for **ROCm 10** (`build-text-rocm10/strata`, `ff24e50b…`, installed 2026-10-11 04:02 UTC; the `0550f3f2…` v0.1.42 build is kept beside it as `strata.v0142-0550f3f2.bak`, and the previous validated **v0.1.40.1 / `82f46a8`** artifact `bc1102ba…` with engine fix `74583c6` as `strata-v0.1.40.1`) plus this fork's HIP GPU vision encoder (`709fc4d2…`, unchanged). Accepted scopes ([independent audit receipt](docs/gfx906-results/20261007-rocm10-context-cache/README.md), validated on the `bc1102ba…` artifact): four-slot pipeline/2-group ~32K-token parity with slot-cache reuse, 65K-token solo parking/reuse, 36K-token HTTP bursts, and Web CORS support. The 8082 service runs the v0.1.42 pair; the owner starts it manually. A read-only `GET /metrics` at 2026-10-11 01:06:34 UTC reports engine `0.1.42` with the production IQ3_S settings (4 batch slots, `--batch-groups 2`, `--kv int8 --kv-resident 32768`, `--spec 4`, `pcie_frac 0.00`).
 
 ## Install and build
 
@@ -180,6 +182,8 @@ RDNA wheel defaults.
 On T5810, use the existing `run-iq3-s.sh` / `run-iq2-xs.sh` launchers and the
 [ROCm 10 build selection](docs/GFX906.md), rather than rebuilding the deprecated text backend
 with the experimental installer/preset above. The install examples describe that archived path.
+
+**Is it fast on your PC?** Run `BENCH.bat` (`./bench.sh`): about 5-10 minutes, it measures chat, 4K/16K prompts and an agent-style session with your own settings and writes a report to share ([how](docs/COMMUNITY_BENCHMARKS.md#run-the-benchmark)). On MI50 / MI60, the same report must name the fork build it measured; see [COMMUNITY_BENCHMARKS](docs/COMMUNITY_BENCHMARKS.md) and [docs/GFX906.md](docs/GFX906.md).
 
 After the install command above, start the generated launcher (for the example, `IQ2_XS`):
 
@@ -281,7 +285,7 @@ For the engine's complete option list, run `./engine/strata --help` after instal
 
 ## Project background
 
-This repository tracks upstream Strata through **v0.1.42 / `61b3fb5d`** while maintaining its own gfx906
+This repository tracks upstream Strata through **v0.1.43 / `7695859a`** while maintaining its own gfx906
 compatibility and optimization work. The upstream project still excludes wave64; this fork's purpose is
 to keep MI50 / MI60 usable as upstream evolves. It is not the upstream project's general NVIDIA/CUDA
 release. Upstream source: [Niko1221/Strata](https://github.com/Niko1221/Strata). For architecture details,
