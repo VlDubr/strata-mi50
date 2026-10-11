@@ -1,0 +1,15 @@
+conversation_memory_test exit=0 | conversation_memory_test: 23 checks passed
+conversation_validation_test exit=0 | conversation_validation_test: 972 host-only checks passed
+conversation_copy_test exit=0 | strata conversation copy: 165 checks passed
+coupled_draft_test exit=0 | PASS
+draft_kv_plan_test exit=0 | draft_kv_plan_test: all ok
+expert_profile_save_test exit=0 | expert_profile_save_test: OK
+expert_profile_version_test exit=0 | expert_profile_version_test: OK
+file_expert_source_test exit=0 | file_expert_source_test: PASS
+message_boundary_test exit=0 | message_boundary_test OK (21 checks)
+pinned_shared_test exit=0 | pinned_shared_test: OK
+platform_memory_test exit=1 | platform_memory_test: FAILED
+ple_reader_test exit=2 | nothing to do
+session_save_reclaim_test exit=0 | session_save_reclaim: 119 checks passed
+spec_prob_test exit=0 | spec_prob_test: 72 cases, 0 failed
+split_ring_test exit=0 | split_ring_test OK (23 checks)

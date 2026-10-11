@@ -1,0 +1,18 @@
+{
+ "round": "v0.1.43 deploy-prep build on the main checkout (service left running)",
+ "utc_start": "2026-10-11T18:55:26Z",
+ "source": {"branch": "gfx906", "head": "7ffd929e", "upstream_merge": "24eb7211", "upstream": "7695859a", "fork_copy_fix_included": "e450d67a"},
+ "llama_cpp": "3cf03257f219afbe7334045ff7c6a06ac68c627d",
+ "ggml_c_sha256": "1a634ca1df25db2fbd526cba9bfe11fccd5aa9b31f819c3cac6b630be03f9f51",
+ "build_dir": "build-text-rocm10-v43",
+ "configure": ["-G Ninja","-DCMAKE_BUILD_TYPE=Release","-DSTRATA_HIP_GFX906=ON","-DSTRATA_ENABLE_HIP=OFF","-DCMAKE_HIP_ARCHITECTURES=gfx906","-DCMAKE_HIP_COMPILER=/opt/rocm-10.0/core-10.0/lib/llvm/bin/clang++","-DCMAKE_HIP_COMPILER_ROCM_ROOT=/opt/rocm-10.0/core-10.0","-DCMAKE_PREFIX_PATH=/opt/rocm-10.0/core-10.0","-DSTRATA_PORTABLE=ON","-DSTRATA_PREFILL_MMQ=OFF","-DSTRATA_BUILD_CONVERSATION_TESTS=ON","-DFETCHCONTENT_SOURCE_DIR_STRATA_LLAMACPP=.../build-text-rocm10-cachefix/_deps/strata_llamacpp-src"],
+ "build": {"exit": 0, "seconds": 176, "targets": 300, "errors": 0, "warnings": 2103, "warning_classes": {"Wunused-result": 1224, "Wsign-compare": 492, "Wunused-value": 262, "Wunused-parameter": 52, "Wunused-const-variable": 22, "Wunused-function": 20, "Wunused-private-field": 10, "Wunused-variable": 8}},
+ "text_artifact": {"path": "build-text-rocm10-v43/strata", "bytes": 22729416, "sha256": "dd7eaf975c612a505c4ab2c734bd87273c548c7ee2c016ebec94eb47bd70e442", "version_string": "0.1.43", "rocm10_libs": 20, "rocm724_libs": 0},
+ "hash_differs_from_build_check": {"recorded": "adf2c616d5adc3a79c19e3b1f97a14c974fcb9c372e6150b7aa6c4e979c12212", "cause": "source 8c84ecb0..7ffd929e is docs-only; the binary embeds absolute source paths (29 hits for /home/chris/dev/strata-gfx906), and the check built in /home/chris/dev/strata-merge-check-43; per-class warning counts match exactly", "reproducibility_scope": "same build directory only"},
+ "tests_run": {"conversation_copy_test": "165 checks passed (single-device: ran on GPU0 while the 8082 service held both cards)", "conversation_validation_test": "972 host-only checks passed", "conversation_memory_test": "23 passed", "session_save_reclaim_test": "119 passed", "split_ring_test": "23 passed", "spec_prob_test": "72 cases 0 failed", "message_boundary_test": "21 passed", "coupled_draft_test": "PASS", "draft_kv_plan_test": "all ok", "expert_profile_save_test": "OK", "expert_profile_version_test": "OK", "file_expert_source_test": "PASS", "pinned_shared_test": "OK"},
+ "tests_not_passing": {"platform_memory_test": "exit 1 - lock_resident mlock failed; ulimit -l is 8192 KB (8 MiB) and the test locks a 256 MiB region; the older build-hip build fails the same way on this machine, so it is an environment prerequisite, not a v0.1.43 regression", "ple_reader_test": "exit 2 - CLI tool, prints nothing to do with no fixture argument; not a test failure"},
+ "tests_deferred_to_maintenance_window": ["conversation_snapshot_test (3901 checks, device)", "vmm_test", "all *_parity tests (STRATA_BUILD_TESTS=OFF, not built)"],
+ "runtime_acceptance": "none - the v43 binary was never executed; both cards are held by the running service (2186 MiB VRAM free)",
+ "deployed_unchanged": {"text": "ff24e50b980fa555c7a014f7bd60f67a7a61c36a650a4ee03ca885316755d8dc", "vision": "709fc4d2c34abbede8b17cb93a4a9571c931338339d3848691c5b59f156d8452"},
+ "service_untouched": {"server": 375759, "vision": 375769, "engine": 375796, "health_after_round": "ok loaded:true images:true", "new_kernel_faults": 0}
+}

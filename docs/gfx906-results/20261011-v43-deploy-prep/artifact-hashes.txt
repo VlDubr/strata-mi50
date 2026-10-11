@@ -1,0 +1,3 @@
+dd7eaf975c612a505c4ab2c734bd87273c548c7ee2c016ebec94eb47bd70e442  build-text-rocm10-v43/strata
+ff24e50b980fa555c7a014f7bd60f67a7a61c36a650a4ee03ca885316755d8dc  build-text-rocm10/strata
+709fc4d2c34abbede8b17cb93a4a9571c931338339d3848691c5b59f156d8452  build-vision-rocm10/bin/strata-vision

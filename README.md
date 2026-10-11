@@ -3,7 +3,9 @@
 **Source version: Strata v0.1.43 / `7695859a`** (merged into `gfx906` on 2026-10-11; not deployed).
 The deployed T5810 text engine `build-text-rocm10/strata` is the **v0.1.42 / `61b3fb5d`** merge build
 with this fork's conversation-copy fix on top: SHA256 `ff24e50b…`, installed 2026-10-11 04:02 UTC. The
-v0.1.42 artifact `0550f3f2…` is kept beside it as `strata.v0142-0550f3f2.bak`, the earlier **v0.1.40.1**
+A **v0.1.43** build of the same tree is staged on the machine as `build-text-rocm10-v43/strata`
+(`dd7eaf97…`, built 2026-10-11 18:58 UTC, host-side tests pass, never executed): deploying it needs an
+owner-approved restart of 8082. The v0.1.42 artifact `0550f3f2…` is kept beside it as `strata.v0142-0550f3f2.bak`, the earlier **v0.1.40.1**
 artifact `bc1102ba…` as `strata-v0.1.40.1`, and the vision encoder is unchanged at `709fc4d2…`. The 8082
 service runs that pair; the owner starts it manually, and a read-only `GET /metrics` at 2026-10-11
 01:06:34 UTC reports engine `0.1.42` with the production IQ3_S settings.
