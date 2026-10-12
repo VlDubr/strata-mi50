@@ -1,10 +1,16 @@
 #pragma once
 
+#include "strata/core/conversation_cache.hpp"
+#include "strata/core/progress.hpp"
+
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
+#include <cstdlib>
+#include <thread>
 #include <vector>
 
 namespace strata::core::conversation_detail {
@@ -61,21 +67,31 @@ inline cudaError_t copy_nonblocking(void* dst, const void* src, size_t bytes) {
         endpoint_kind(dst, dst_device, dst_accessible) != cudaSuccess) {
         // An endpoint the runtime refuses to classify: the behaviour before the bounce existed.
         e = cudaMemcpyAsync(dst, src, bytes, cudaMemcpyDefault, s);
-        return e != cudaSuccess ? e : cudaStreamSynchronize(s);
+        if (e != cudaSuccess) return e;
+        e = cudaStreamSynchronize(s);
+        if (e == cudaSuccess) core::progress_beat();   // #2049: a parked conversation is many of these
+        return e;
     }
     if (!src_device && !dst_device) {
         // Host to host, through an alias or not: the CPU moves the bytes, the GPU nothing.
         std::memmove(dst, src, bytes);
+        core::progress_beat();   // #2049: pageable parked state copies at page-in speed and stays silent
         return cudaSuccess;
     }
     if (src_device && dst_device) {
         e = cudaMemcpyAsync(dst, src, bytes, cudaMemcpyDeviceToDevice, s);
-        return e != cudaSuccess ? e : cudaStreamSynchronize(s);
+        if (e != cudaSuccess) return e;
+        e = cudaStreamSynchronize(s);
+        if (e == cudaSuccess) core::progress_beat();
+        return e;
     }
     if (src_device ? dst_accessible : src_accessible) {
         // The device blit only touches the endpoint whose mapping is stable for the allocation's lifetime.
         e = cudaMemcpyAsync(dst, src, bytes, src_device ? cudaMemcpyDeviceToHost : cudaMemcpyHostToDevice, s);
-        return e != cudaSuccess ? e : cudaStreamSynchronize(s);
+        if (e != cudaSuccess) return e;
+        e = cudaStreamSynchronize(s);
+        if (e == cudaSuccess) core::progress_beat();
+        return e;
     }
     // One endpoint is plain (not device-accessible) host memory: stage the plain leg through pinned bounce
     // scratch so no blit ever writes or reads pages a free could take away while it runs.
@@ -100,8 +116,58 @@ inline cudaError_t copy_nonblocking(void* dst, const void* src, size_t bytes) {
             if (e == cudaSuccess) e = cudaStreamSynchronize(s);
         }
         if (e != cudaSuccess) return e;
+        core::progress_beat();   // #2049: each slice that lands is progress, as upstream's plain copy reports
     }
     return cudaSuccess;
+}
+
+/// #2049 #2065 #1971: a host-to-host copy that tells the watchdog it is moving.  Parked state (the running
+/// checkpoints, the K/V segments) sits in ordinary pageable memory for the whole session; when the OS has written
+/// it to the pagefile, copying it back runs at the drive's page-in speed (measured in the reports: ~190 hard faults
+/// a second, under 1 MB/s) and one memcpy of it stays silent past the 60 s limit, so the watchdog ended an engine
+/// that was only slow.  One beat per 1 MiB slice keeps a copy that moves alive and still lets a real stall show.
+/// STRATA_TEST_SLOW_COPY_US=N (tests only): every 1 MiB slice of a checkpoint copy takes N microseconds more, as when
+/// the OS has paged the checkpoints out and each slice is read back from the drive.  Unset: no delay.
+inline long test_slow_copy_us() {
+    static const long v = [] { const char* e = std::getenv("STRATA_TEST_SLOW_COPY_US"); return e ? std::atol(e) : 0L; }();
+    return v;
+}
+
+template<class T>
+inline std::vector<T> copy_beating(const std::vector<T>& src) {
+    std::vector<T> out;
+    out.reserve(src.size());
+    const size_t step = std::max<size_t>(1, ((size_t) 1 << 20) / sizeof(T));
+    for (size_t at = 0; at < src.size(); at += step) {
+        out.insert(out.end(), src.begin() + (std::ptrdiff_t) at,
+                   src.begin() + (std::ptrdiff_t) std::min(src.size(), at + step));
+        if (const long us = test_slow_copy_us(); us > 0) std::this_thread::sleep_for(std::chrono::microseconds(us));
+        core::progress_beat();
+    }
+    return out;
+}
+
+inline ConversationCheckpoint copy_checkpoint_beating(const ConversationCheckpoint& c) {
+    ConversationCheckpoint o;
+    o.ids = copy_beating(c.ids);
+    o.imgs = copy_beating(c.imgs);
+    o.gdn = copy_beating(c.gdn);
+    o.ple = copy_beating(c.ple);
+    o.tails = copy_beating(c.tails);
+    o.dead = copy_beating(c.dead);
+    o.block_pos = copy_beating(c.block_pos);
+    o.used = c.used;
+    o.pinned = c.pinned;
+    o.stage_parts.reserve(c.stage_parts.size());
+    for (const auto& part : c.stage_parts) o.stage_parts.push_back(copy_checkpoint_beating(part));
+    return o;
+}
+
+inline std::vector<ConversationCheckpoint> copy_checkpoints_beating(const std::vector<ConversationCheckpoint>& cs) {
+    std::vector<ConversationCheckpoint> out;
+    out.reserve(cs.size());
+    for (const auto& c : cs) out.push_back(copy_checkpoint_beating(c));
+    return out;
 }
 
 } // namespace strata::core::conversation_detail

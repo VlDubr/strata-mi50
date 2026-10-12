@@ -1,14 +1,16 @@
 # Strata for AMD Instinct MI50 / MI60
 
-**Source version: Strata v0.1.43 / `7695859a`** (merged into `gfx906` on 2026-10-11; not deployed).
-The deployed T5810 text engine `build-text-rocm10/strata` is the **v0.1.42 / `61b3fb5d`** merge build
-with this fork's conversation-copy fix on top: SHA256 `ff24e50b…`, installed 2026-10-11 04:02 UTC. The
-A **v0.1.43** build of the same tree is staged on the machine as `build-text-rocm10-v43/strata`
-(`dd7eaf97…`, built 2026-10-11 18:58 UTC, host-side tests pass, never executed): deploying it needs an
-owner-approved restart of 8082. The v0.1.42 artifact `0550f3f2…` is kept beside it as `strata.v0142-0550f3f2.bak`, the earlier **v0.1.40.1**
-artifact `bc1102ba…` as `strata-v0.1.40.1`, and the vision encoder is unchanged at `709fc4d2…`. The 8082
-service runs that pair; the owner starts it manually, and a read-only `GET /metrics` at 2026-10-11
-01:06:34 UTC reports engine `0.1.42` with the production IQ3_S settings.
+**Source version: Strata v0.1.43.1 / `a0116b27`** (merged into `gfx906` on 2026-10-12; build check on
+T5810 pending, not deployed).
+The deployed T5810 text engine `build-text-rocm10/strata` is the **v0.1.43 / `7695859a`** merge build
+with this fork's conversation-copy fix on top: SHA256 `dd7eaf97…`, built 2026-10-11 18:58 UTC and
+installed 2026-10-11 19:39 UTC by `deploy-v43.sh --stop-current`. A read-only `GET /health` and
+`GET /metrics` at 2026-10-12 19:55:57 UTC report `loaded: true` and engine `0.1.43` on the production
+IQ3_S settings, with that engine process (PID 410015) up 1 day. The v0.1.42 copy-fix artifact
+`ff24e50b…` is kept as `strata.v0142-copyfix-ff24e50b.bak`, the plain v0.1.42 `0550f3f2…` as
+`strata.v0142-0550f3f2.bak`, the earlier **v0.1.40.1** artifact `bc1102ba…` as `strata-v0.1.40.1`, and
+the vision encoder is unchanged at `709fc4d2…`. The 8082 service runs that pair; the owner starts it
+manually.
 
 **Key features in this release:**
 - **Concurrent execution:** Multi-slot concurrent request batching and decoding across independent context sequences.
@@ -287,7 +289,7 @@ For the engine's complete option list, run `./engine/strata --help` after instal
 
 ## Project background
 
-This repository tracks upstream Strata through **v0.1.43 / `7695859a`** while maintaining its own gfx906
+This repository tracks upstream Strata through **v0.1.43.1 / `a0116b27`** while maintaining its own gfx906
 compatibility and optimization work. The upstream project still excludes wave64; this fork's purpose is
 to keep MI50 / MI60 usable as upstream evolves. It is not the upstream project's general NVIDIA/CUDA
 release. Upstream source: [Niko1221/Strata](https://github.com/Niko1221/Strata). For architecture details,
