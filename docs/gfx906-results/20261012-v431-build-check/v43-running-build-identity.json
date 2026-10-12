@@ -1,0 +1,16 @@
+{
+ "upstream": "7695859aa13afb248bdb4d36f9b2e95707db079d",
+ "merge": "24eb7211",
+ "engine_change": "e450d67a",
+ "llama_cpp": "3cf03257f219afbe7334045ff7c6a06ac68c627d",
+ "text": {
+  "path": "/home/chris/dev/strata-gfx906/build-text-rocm10-v43/strata",
+  "sha256": "dd7eaf975c612a505c4ab2c734bd87273c548c7ee2c016ebec94eb47bd70e442"
+ },
+ "vision": {
+  "path": "/home/chris/dev/strata-gfx906/build-vision-rocm10/bin/strata-vision",
+  "sha256": "709fc4d2c34abbede8b17cb93a4a9571c931338339d3848691c5b59f156d8452"
+ },
+ "hf_revision": "ed59f92082b1e93c0e96d60a8b11aab089b52f09",
+ "note": "Backfill of the build-identity record for the engine that has run 8082 since 2026-10-11 19:39 UTC: upstream v0.1.43 (7695859a) merged into gfx906 as 24eb7211, with the fork conversation-copy fix e450d67a on top. Built 2026-10-11 18:55-19:04 UTC in build-text-rocm10-v43 on this checkout (b5c65877) with the build-text-rocm10-copyfix switches; installed by deploy-v43.sh --stop-current at 19:39 UTC. The record was written 2026-10-12 by the v0.1.43.1 round, which is why strata-current.sh reported NORECORD before. ggml commit 3cf03257f confirmed in logs/v43-prep-20261011T185526Z; gfx906 arch confirmed by the configure line Strata: HIP (gfx906 compat) enabled, arch gfx906. Vision unchanged (709fc4d2)."
+}

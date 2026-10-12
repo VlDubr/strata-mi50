@@ -1,7 +1,8 @@
 # Strata for AMD Instinct MI50 / MI60
 
-**Source version: Strata v0.1.43.1 / `a0116b27`** (merged into `gfx906` on 2026-10-12; build check on
-T5810 pending, not deployed).
+**Source version: Strata v0.1.43.1 / `a0116b27`** (merged into `gfx906` on 2026-10-12 as `9c26f21f`;
+built on T5810 as `build-text-rocm10-v431/strata` = `11b847dc…`, host-side tests pass, never executed
+and not deployed).
 The deployed T5810 text engine `build-text-rocm10/strata` is the **v0.1.43 / `7695859a`** merge build
 with this fork's conversation-copy fix on top: SHA256 `dd7eaf97…`, built 2026-10-11 18:58 UTC and
 installed 2026-10-11 19:39 UTC by `deploy-v43.sh --stop-current`. A read-only `GET /health` and

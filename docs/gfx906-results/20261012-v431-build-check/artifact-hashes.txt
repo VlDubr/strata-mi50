@@ -1,0 +1,8 @@
+# v0.1.43.1 build-check artifact hashes (2026-10-12 20:09 UTC)
+
+staged, never executed: build-text-rocm10-v431/strata
+11b847dcbce3fbf88d9a3d8673e6fa28545e0ee3448cb7d8b653083f79841bd0  build-text-rocm10-v431/strata
+deployed since 2026-10-11 19:39 UTC: build-text-rocm10/strata
+dd7eaf975c612a505c4ab2c734bd87273c548c7ee2c016ebec94eb47bd70e442  build-text-rocm10/strata
+unchanged vision: build-vision-rocm10/bin/strata-vision
+709fc4d2c34abbede8b17cb93a4a9571c931338339d3848691c5b59f156d8452  build-vision-rocm10/bin/strata-vision

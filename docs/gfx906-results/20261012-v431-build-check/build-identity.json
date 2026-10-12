@@ -1,0 +1,16 @@
+{
+ "upstream": "a0116b2782a5b82622358c04a06496485d12b2d6",
+ "merge": "9c26f21f",
+ "engine_change": "e450d67a",
+ "llama_cpp": "3cf03257f219afbe7334045ff7c6a06ac68c627d",
+ "text": {
+  "path": "/home/chris/dev/strata-gfx906/build-text-rocm10-v431/strata",
+  "sha256": "11b847dcbce3fbf88d9a3d8673e6fa28545e0ee3448cb7d8b653083f79841bd0"
+ },
+ "vision": {
+  "path": "/home/chris/dev/strata-gfx906/build-vision-rocm10/bin/strata-vision",
+  "sha256": "709fc4d2c34abbede8b17cb93a4a9571c931338339d3848691c5b59f156d8452"
+ },
+ "hf_revision": "ed59f92082b1e93c0e96d60a8b11aab089b52f09",
+ "note": "v0.1.43.1 build check 2026-10-12 20:03-20:06 UTC, NOT deployed and never executed. Checkout fast-forwarded b5c65877 -> 9c26f21f (upstream v0.1.43.1 merge). New build directory build-text-rocm10-v431 with the authoritative build-text-rocm10-copyfix switches; 300 targets, exit 0, 0 errors, 2129 warnings. Vision not rebuilt: the merge touches no file under tools/vision/ or third_party/. 21 host-side ctest tests pass with CUDA_VISIBLE_DEVICES=-1; conversation_copy_test skipped (no device); no GPU test ran because the live 8082 service holds both cards."
+}

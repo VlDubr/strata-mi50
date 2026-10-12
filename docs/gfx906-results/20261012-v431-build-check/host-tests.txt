@@ -1,0 +1,51 @@
+Test project /home/chris/dev/strata-gfx906/build-text-rocm10-v431
+      Start  1: conversation_cache_test
+ 1/21 Test  #1: conversation_cache_test ...........   Passed    0.03 sec
+      Start  2: conversation_split_failure_test
+ 2/21 Test  #2: conversation_split_failure_test ...   Passed    0.00 sec
+      Start  3: conversation_memory_test
+ 3/21 Test  #3: conversation_memory_test ..........   Passed    0.00 sec
+      Start  4: conversation_file_test
+ 4/21 Test  #4: conversation_file_test ............   Passed    1.81 sec
+      Start  5: session_save_reclaim_test
+ 5/21 Test  #5: session_save_reclaim_test .........   Passed    0.00 sec
+      Start  6: file_expert_source_test
+ 6/21 Test  #6: file_expert_source_test ...........   Passed    0.26 sec
+      Start  8: expert_profile_save_test
+ 7/21 Test  #8: expert_profile_save_test ..........   Passed    0.03 sec
+      Start  9: expert_profile_version_test
+ 8/21 Test  #9: expert_profile_version_test .......   Passed    0.03 sec
+      Start 11: conversation_copy_test
+ 9/21 Test #11: conversation_copy_test ............***Skipped   0.05 sec
+      Start 12: conversation_validation_test
+10/21 Test #12: conversation_validation_test ......   Passed    0.08 sec
+      Start 56: pinned_shared_test
+11/21 Test #56: pinned_shared_test ................   Passed    0.04 sec
+      Start 57: ple_reader_selftest
+12/21 Test #57: ple_reader_selftest ...............   Passed    6.67 sec
+      Start 59: message_boundary_test
+13/21 Test #59: message_boundary_test .............   Passed    0.00 sec
+      Start 60: split_ring_test
+14/21 Test #60: split_ring_test ...................   Passed    0.00 sec
+      Start 61: conv_cache_test
+15/21 Test #61: conv_cache_test ...................   Passed    0.00 sec
+      Start 62: draft_kv_plan_test
+16/21 Test #62: draft_kv_plan_test ................   Passed    0.00 sec
+      Start 63: coupled_draft_test
+17/21 Test #63: coupled_draft_test ................   Passed    0.00 sec
+      Start 64: spec_prob_test
+18/21 Test #64: spec_prob_test ....................   Passed    5.17 sec
+      Start 65: bf16_bits_test
+19/21 Test #65: bf16_bits_test ....................   Passed    1.96 sec
+      Start 66: batch_rows_test
+20/21 Test #66: batch_rows_test ...................   Passed    0.00 sec
+      Start 67: batch_groups_test
+21/21 Test #67: batch_groups_test .................   Passed    0.00 sec
+
+100% tests passed, 0 tests failed out of 21
+
+Total Test time (real) =  16.16 sec
+
+The following tests did not run:
+	 11 - conversation_copy_test (Skipped)
+ctest_exit=0
