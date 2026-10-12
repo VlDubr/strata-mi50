@@ -1,0 +1,3 @@
+11b847dcbce3fbf88d9a3d8673e6fa28545e0ee3448cb7d8b653083f79841bd0  build-text-rocm10/strata
+dd7eaf975c612a505c4ab2c734bd87273c548c7ee2c016ebec94eb47bd70e442  build-text-rocm10/strata.v0143-dd7eaf97.bak
+11b847dcbce3fbf88d9a3d8673e6fa28545e0ee3448cb7d8b653083f79841bd0  build-text-rocm10-v431/strata

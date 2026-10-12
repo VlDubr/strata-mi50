@@ -1,0 +1,12 @@
+--- post-install verification ---
+0.1.43.1 string hits: 2
+ROCm10 libs: 20
+7.2.4 libs: 0
+--- service still the old process ---
+410015 /home/chris/dev/strata-gfx906/build-text-rocm10/strata --serve 
+/home/chris/dev/strata-gfx906/build-text-rocm10/strata (deleted)
+{"status": "ok", "max_context": 262144, "model": "Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S", "images": true, "api_key": false, "loaded": true, "service": "strata"}
+engine version: 0.1.43
+GPU[0]		: GPU use (%): 0
+GPU[1]		: GPU use (%): 0
+/dev/mapper/ubuntu--vg-ubuntu--lv  232G  200G   21G  91% /

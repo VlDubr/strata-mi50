@@ -1,0 +1,35 @@
+== 配置所指(run-iq3-s.json)
+  text   : /home/chris/dev/strata-gfx906/build-text-rocm10/strata
+  vision : /home/chris/dev/strata-gfx906/build-vision-rocm10/bin/strata-vision
+  sha256 11b847dcbce3fbf8... strata
+  sha256 709fc4d2c34abbed... strata-vision
+== 构建身份(logs/*/build-identity.json)
+  text: logs/v431-build-20261012T200319Z/build-identity.json
+    upstream = a0116b2782a5b82622358c04a06496485d12b2d6
+    merge = 9c26f21f
+    engine_change = e450d67a
+    llama_cpp = 3cf03257f219afbe7334045ff7c6a06ac68c627d
+    编译位置: /home/chris/dev/strata-gfx906/build-text-rocm10-v431/strata
+    开关(build-text-rocm10-v431/CMakeCache.txt): STRATA_HIP_GFX906=BOOL=ON STRATA_ENABLE_HIP=BOOL=OFF CMAKE_HIP_ARCHITECTURES=UNINITIALIZED=gfx906 CMAKE_HOME_DIRECTORY=INTERNAL=/home/chris/dev/strata-gfx906
+  vision: logs/ab-batchgroups-20261010/build-identity.json
+    upstream = 61b3fb5dd3f1e8ec09cf7e4e05208bc6d3c46406
+    merge = 7f1049784f2679d750816b98d84045545a022570
+    engine_change = ?
+    llama_cpp = 3cf03257f219afbe7334045ff7c6a06ac68c627d
+    编译位置: /home/chris/dev/strata-gfx906/build-vision-rocm10/bin/strata-vision
+    开关(build-vision-rocm10/CMakeCache.txt): STRATA_VISION_HIP=BOOL=ON STRATA_EXPERIMENTAL_GFX906=BOOL=ON CMAKE_HIP_ARCHITECTURES=UNINITIALIZED=gfx906 CMAKE_PROJECT_NAME=STATIC=strata_vision CMAKE_HOME_DIRECTORY=INTERNAL=/home/chris/dev/strata-gfx906/tools/vision
+== 正在跑的进程
+  server PID: 409978
+  PID 410015  /home/chris/dev/strata-gfx906/build-text-rocm10/strata (deleted)
+          runtime: /opt/rocm-10.0/core-10.0/lib/libamdhip64.so.7.15.26333-0000000
+          sha256: ...
+违反规则: 进程 410015 跑的不是配置所指文件: /home/chris/dev/strata-gfx906/build-text-rocm10/strata (deleted)
+  PID 409984  /home/chris/dev/strata-gfx906/build-vision-rocm10/bin/strata-vision
+          runtime: /opt/rocm-10.0/core-10.0/lib/libamdhip64.so.7.15.26333-0000000
+          sha256: 709fc4d2c34abbed...
+== ROCm 默认
+  /opt/rocm -> /opt/rocm-10.0
+  libamdhip64: /opt/rocm-10.0/core-10.0/lib/libamdhip64.so.7
+== 健康
+  {"status": "ok", "max_context": 262144, "model": "Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S", "images": true, "api_key": false, "loaded": true, "service": "strata"}
+结论: 不符合现役规则
