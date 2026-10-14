@@ -1,7 +1,10 @@
 {
  "upstream": "296b59d2f73c8f04a805df29c2fa97655adace78",
  "merge": "4db615c7",
- "gfx906_build_fixes": ["8b62485e", "e31ba87b"],
+ "gfx906_build_fixes": [
+  "8b62485e",
+  "e31ba87b"
+ ],
  "llama_cpp": "3cf03257f219afbe7334045ff7c6a06ac68c627d",
  "text": {
   "path": "/home/chris/dev/strata-gfx906/build-text-rocm10-v441/strata",
@@ -12,5 +15,6 @@
   "sha256": "f8a183ffd518133ed5079f6edc9f98fc826b180b540d202c242bead2502bc75d"
  },
  "hf_revision": "ed59f92082b1e93c0e96d60a8b11aab089b52f09",
- "note": "v0.1.44.1 build check 2026-10-14 02:08-02:15 UTC, NOT deployed and never executed. Checkout fast-forwarded 3d8f1c94 -> e31ba87b (merge 4db615c7 of upstream v0.1.44.1 plus the two gfx906 build fixes 8b62485e [W4A4 unit excluded from the compat build] and e31ba87b [cublasSgemm/cublasGemmStridedBatchedEx added to the HIP shim]). New build directories build-text-rocm10-v441 and build-vision-rocm10-v441 with the authoritative ROCm 10 switches; text 329 edges, exit 0, 0 errors, 2260 warnings (1366 -Wunused-result, 502 -Wsign-compare, 270 -Wunused-value, then smaller classes), 3 m 21.9 s; artifact hash reproducible across the earlier incremental build. The vision encoder was rebuilt because upstream's 2-line change to tools/vision/strata_vision.cpp (a macOS posix_fadvise guard) changed that source; the running vision binary 709fc4d2 stays at its path. 21 host-side ctest tests pass with CUDA_VISIBLE_DEVICES=-1 HIP_VISIBLE_DEVICES=; conversation_copy_test and conversation_snapshot_test skipped (no device); the 44 *_parity / cuda_device_selftest / platform_memory_test failures are GPU-requiring tests that cannot run while the live 8082 service holds both cards. No install, no restart, no config change: the running engine stays v0.1.43.1 (11b847dc)."
+ "note": "v0.1.44.1 build check 2026-10-14 02:08-02:15 UTC (329 edges, exit 0, 0 errors, 2260 warnings, 3 m 21.9 s; hash reproducible across an incremental build of the same sources). Vision rebuilt because upstream touched tools/vision/strata_vision.cpp (a macOS guard, inert on Linux); 275 edges, exit 0. Deployed to the live paths 2026-10-14 ~19:24 UTC with install -m 0755 while 8082 kept running (owner: deploy, I restart myself); the running processes keep the v0.1.43.1 inodes (text 11b847dc, vision 709fc4d2, both (deleted)) until the owner restarts; the new binaries have never executed. Build fixes: 8b62485e excludes the RTX-50-only strata_mmq_w4a4 unit from the compat build; e31ba87b maps cublasSgemm/cublasGemmStridedBatchedEx in the HIP shim for src/qwen35/q36_engine.cu. Host tests: the 21 non-GPU ctest tests pass; the GPU-requiring parity suites stay deferred while 8082 holds both cards. llama.cpp pin 3cf03257f unchanged; no third_party file touched.",
+ "engine_change": "e31ba87b"
 }

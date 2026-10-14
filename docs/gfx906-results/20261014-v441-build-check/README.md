@@ -12,5 +12,9 @@ Raw evidence for the [v0.1.44.1 build check](../../GFX906.md#v01441-build-check-
   `ctest` output (`v441-ctest-full.txt`: 69 tests — 23 pass, 44 GPU-requiring failures, 2 no-device
   skips).
 
-Nothing was installed, restarted or reconfigured; the 8082 service (server 1065666, vision 1065676,
-text engine 1065703) ran the whole round on the v0.1.43.1 binaries.
+Nothing was stopped or restarted; the 8082 service (server 1734867, vision 1734877, text engine
+1734906) ran the whole round on the v0.1.43.1 binaries. Both artifacts were then **deployed to the
+live paths** on owner instruction ("deploy, I restart myself") at ~19:24 UTC: `build-text-rocm10/strata`
+= `050b83e6…`, `build-vision-rocm10/bin/strata-vision` = `f8a183ff…`, with the running processes
+keeping the v0.1.43.1 inodes (`(deleted)`) until the owner restarts. See
+[GFX906.md's deployment section](../../GFX906.md#v01441-installed-on-8082s-paths-without-a-restart-2026-10-14-1924-utc).
