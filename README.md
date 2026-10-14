@@ -1,19 +1,24 @@
 # Strata for AMD Instinct MI50 / MI60
 
-**Source version: Strata v0.1.44.1 / `296b59d2`** (merged into `gfx906` on 2026-10-14; build check on
-T5810 pending, not deployed).
-**Deployed but not yet running:** `build-text-rocm10/strata` is the **v0.1.43.1** build
-(`11b847dc…`), installed 2026-10-12 20:37:50 UTC with `install -m 0755` while 8082 kept running, on
-owner instruction ("deploy, I restart myself"). The **running** engine (PID 410015, up since 2026-10-11
-19:39 UTC) is still the **v0.1.43 / `7695859a`** artifact `dd7eaf97…` — its old inode, kept alive by the
-running process — so `/metrics` still reports engine `0.1.43` until the owner restarts 8082. After a
-restart, `bash /home/chris/mi50-t5810/scripts/verify-v431.sh` checks the deployed hash, the engine
-version (`0.1.43.1`), the mapped ROCm 10 runtime, one real `STRATA OK` generation and
-`strata-current.sh`. The previous artifact is kept as `build-text-rocm10/strata.v0143-dd7eaf97.bak`
-(rollback: `rollback-v431.sh`), the v0.1.42 copy-fix `ff24e50b…` as `strata.v0142-copyfix-ff24e50b.bak`,
-the plain v0.1.42 `0550f3f2…` as `strata.v0142-0550f3f2.bak`, the earlier **v0.1.40.1** artifact
-`bc1102ba…` as `strata-v0.1.40.1`, and the vision encoder is unchanged at `709fc4d2…`. `run-iq3-s.json`
-is byte-unchanged; the owner starts the service manually.
+**Source version: Strata v0.1.44.1 / `296b59d2`** (merged into `gfx906` on 2026-10-14 as `4db615c7`;
+built on T5810 in `build-text-rocm10-v441` + `build-vision-rocm10-v441`, host-side tests pass — both
+staged artifacts **never executed**, nothing installed).
+**Running:** the owner restarted 8082 at 2026-10-13 06:40:53-06:40:59 UTC (server 1065666, vision
+1065676, text engine 1065703, up ~20 h at this round's preflight), and the **v0.1.43.1** build
+(`11b847dc…`) — installed on 2026-10-12 20:37:50 UTC while 8082 kept running — is now the live text
+engine (read-only `/health` and `/metrics` at 2026-10-14 01:59 UTC report `loaded: true`, engine
+`0.1.43.1`, and the `--conversation-cache-mib 16384` config edit in effect). The v0.1.43 /
+`7695859a` artifact `dd7eaf97…`
+it replaced is kept as `build-text-rocm10/strata.v0143-dd7eaf97.bak` (rollback:
+`rollback-v431.sh`), the v0.1.42 copy-fix `ff24e50b…` as `strata.v0142-copyfix-ff24e50b.bak`, the
+plain v0.1.42 `0550f3f2…` as `strata.v0142-0550f3f2.bak`, the earlier **v0.1.40.1** artifact
+`bc1102ba…` as `strata-v0.1.40.1`. The vision encoder is unchanged at `709fc4d2…` (its v0.1.44.1
+rebuild is staged beside it, not installed). `bash /home/chris/mi50-t5810/scripts/verify-v431.sh`
+checks the deployed hash, the engine version (`0.1.43.1`), the mapped ROCm 10 runtime, one real
+`STRATA OK` generation and `strata-current.sh`. The **v0.1.44.1** text and vision artifacts of
+2026-10-14 are staged in `build-text-rocm10-v441/` and `build-vision-rocm10-v441/` and have **never
+executed**; installing either is an owner decision. `run-iq3-s.json` is byte-unchanged this round;
+the owner starts the service manually.
 
 **Key features in this release:**
 - **Concurrent execution:** Multi-slot concurrent request batching and decoding across independent context sequences.
