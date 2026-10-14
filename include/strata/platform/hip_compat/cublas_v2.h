@@ -1,4 +1,5 @@
-// cublas_v2.h for a STRATA_ENABLE_HIP build: the cuBLAS names src/prefill/gemm.cu uses, on hipBLAS.
+// cublas_v2.h for a STRATA_ENABLE_HIP build: the cuBLAS names src/prefill/gemm.cu and src/qwen35/q36_engine.cu
+// use, on hipBLAS.
 #pragma once
 #include "strata_hip.h"
 #ifndef HIPBLAS_V2
@@ -13,6 +14,8 @@
 #define cublasDestroy hipblasDestroy
 #define cublasSetStream hipblasSetStream
 #define cublasGemmEx hipblasGemmEx
+#define cublasSgemm hipblasSgemm
+#define cublasGemmStridedBatchedEx hipblasGemmStridedBatchedEx
 #define CUBLAS_OP_N HIPBLAS_OP_N
 #define CUBLAS_OP_T HIPBLAS_OP_T
 #define CUBLAS_GEMM_DEFAULT HIPBLAS_GEMM_DEFAULT
