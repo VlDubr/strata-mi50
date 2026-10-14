@@ -1479,6 +1479,9 @@ if(STRATA_NATIVE_EXPERTS)
     # NVFP4: W4A8 (default) in mmq_nvfp4_w4a8.cu with the plain architectures; the opt-in W4A4 needs RTX 50's FP4 MMA,
     # which exists only in the arch-specific target, so its one unit alone is built with 12x -> 12xa (the default
     # binary is unchanged and runs on sm_121; a card without that image falls back to W4A8 at run time)
+    # gfx906 (this fork): no W4A4 unit. It is a CUDA sm_12xa-only unit, the HIP moe path's references are all
+    # inside #if !defined(GGML_USE_HIP), and mmq_nvfp4_w4a4.cu includes ggml's CUDA-only vendor headers.
+    if(NOT STRATA_HIP_GFX906)
     set(_strata_w4a4_archs ${CMAKE_CUDA_ARCHITECTURES})
     # (two steps: CMake before 3.29 rejects a \2 whose optional group did not match, "120" alone)
     list(TRANSFORM _strata_w4a4_archs REPLACE "^(12[0-9])$" "\\1a")
@@ -1492,6 +1495,7 @@ if(STRATA_NATIVE_EXPERTS)
     endif()
     target_link_libraries(strata_mmq_w4a4 PUBLIC ggml-base ${_strata_gpu_runtime_target})
     target_link_libraries(strata_mmq PRIVATE strata_mmq_w4a4)
+    endif()
     target_include_directories(strata_mmq PRIVATE ${_strata_gg}/include ${_strata_gg}/src ${_strata_mmq}
                                PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_compile_options(strata_mmq PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda -use_fast_math>)
