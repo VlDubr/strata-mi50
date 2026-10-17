@@ -1,0 +1,20 @@
+=== postflight Sat Oct 17 11:17:41 PM UTC 2026 ===
+PID 1786203 exe: /usr/bin/python3.14 etime: 3-02:22:12
+PID 1786213 exe: /home/chris/dev/strata-gfx906/build-vision-rocm10/bin/strata-vision etime: 3-02:22:12
+PID 1786240 exe: /home/chris/dev/strata-gfx906/build-text-rocm10/strata (deleted) etime: 3-02:22:07
+health: {"status": "ok", "max_context": 262144, "model": "Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S", "images": true, "api_key": false, "image_generation": false, "loaded": true, "service": "strata"}
+engine: 0.1.44.1
+one real greedy generation on the RUNNING (old-inode) engine:
+{"id": "chatcmpl-87dea724a7ce4545975558ad", "object": "chat.completion", "created": 1792279061, "model": "Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S", "choices": [{"index": 0, "message": {"role": "assistant", "content": "STRATA OK"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 19, "completion_tokens": 4, "total_tokens": 23, "prompt_tokens_details": {"cached_tokens": 0}}, "timings": {"cache_n": 0, 
+GPU[0]		: GPU use (%): 0
+GPU[1]		: GPU use (%): 0
+/dev/mapper/ubuntu--vg-ubuntu--lv  232G  201G   20G  92% /
+e45b98065beb593df0e789355985f4df  run-iq3-s.json
+1ba389debc278dda5622c893989e54d9bfea398e2ffeca6255be25009c2d674e  build-text-rocm10/strata
+050b83e6dbe14b71943a0b0c22044d952aaf3c1682e7659ed38874cb228a774c  build-text-rocm10/strata.v01441-050b83e6.bak
+f8a183ffd518133ed5079f6edc9f98fc826b180b540d202c242bead2502bc75d  build-vision-rocm10/bin/strata-vision
+-rwxr-xr-x 1 chris chris 22608584 Oct 11 00:08 build-text-rocm10/strata.v0142-0550f3f2.bak
+-rwxr-xr-x 1 chris chris 22606512 Oct 11 03:45 build-text-rocm10/strata.v0142-copyfix-ff24e50b.bak
+-rwxr-xr-x 1 chris chris 22729416 Oct 11 19:39 build-text-rocm10/strata.v0143-dd7eaf97.bak
+-rwxr-xr-x 1 chris chris 22743160 Oct 12 20:37 build-text-rocm10/strata.v01431-11b847dc.bak
+-rwxr-xr-x 1 chris chris 26948552 Oct 14 19:17 build-text-rocm10/strata.v01441-050b83e6.bak

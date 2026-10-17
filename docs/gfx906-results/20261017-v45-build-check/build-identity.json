@@ -1,0 +1,27 @@
+{
+ "upstream": "477ac13cbe8e582c20484871ce459d20d82df09d",
+ "upstream_tag": "v0.1.45",
+ "merge": "d3d94a1f",
+ "gfx906_build_fixes": [
+  "8b62485e",
+  "e31ba87b",
+  "b1daaa28"
+ ],
+ "llama_cpp": "3cf03257f219afbe7334045ff7c6a06ac68c627d",
+ "text": {
+  "path": "/home/chris/dev/strata-gfx906/build-text-rocm10-v45/strata",
+  "sha256": "1ba389debc278dda5622c893989e54d9bfea398e2ffeca6255be25009c2d674e",
+  "bytes": 31053160
+ },
+ "vision": {
+  "path": "/home/chris/dev/strata-gfx906/build-vision-rocm10-v45/bin/strata-vision",
+  "sha256": "d11f35e70e2b00932175685eba6f2ba07b47cb4b54c16d676ab649226f864f62",
+  "bytes": 48817712,
+  "deployed": false,
+  "note": "compile check only: upstream changed nothing under tools/vision in 296b59d2..477ac13c and the llama.cpp pin is unchanged, so the deployed v0.1.44.1 artifact f8a183ff... stays current. This hash differs from it because the build directory path is embedded in the binary (build-vision-rocm10-v441 vs -v45)."
+ },
+ "configure": "cmake -S . -B build-text-rocm10-v45 -G Ninja -DCMAKE_BUILD_TYPE=Release -DSTRATA_HIP_GFX906=ON -DSTRATA_ENABLE_HIP=OFF -DCMAKE_HIP_ARCHITECTURES=gfx906 -DCMAKE_HIP_COMPILER=/opt/rocm-10.0/core-10.0/lib/llvm/bin/clang++ -DCMAKE_HIP_COMPILER_ROCM_ROOT=/opt/rocm-10.0/core-10.0 -DCMAKE_PREFIX_PATH=/opt/rocm-10.0/core-10.0 -DSTRATA_PORTABLE=ON -DSTRATA_PREFILL_MMQ=OFF -DFETCHCONTENT_SOURCE_DIR_STRATA_LLAMACPP=/home/chris/dev/strata-gfx906/build-text-rocm10-cachefix/_deps/strata_llamacpp-src ; then cmake -S . -B build-text-rocm10-v45 -DSTRATA_BUILD_CONVERSATION_TESTS=ON",
+ "note": "v0.1.45 build check 2026-10-17 22:48-23:20 UTC. First attempt failed at the link (four undefined strata::prefill::fused::f16kq symbols); fixed on the fork by b1daaa28, then a clean rebuild: 304 edges, exit 0, 0 errors, 2808 warnings, 3 m 36.9 s; the incremental and the clean build and the conversation-test reconfigure all link the same hash. CMAKE_PROJECT_VERSION 0.1.45, arch gfx906, ggml 3cf03257f (the pin), STRATA_MMQ_TAB OFF, STRATA_MMQ_KQUANTS/STRATA_Q6K_EXPERTS ON (upstream defaults). 20 libraries under /opt/rocm-10.0, none from /opt/rocm-7.2.4. Host tests: the same 21 non-GPU ctest tests pass with CUDA_VISIBLE_DEVICES=-1 HIP_VISIBLE_DEVICES=; conversation_copy_test and conversation_snapshot_test skip (no device). Vision rebuilt as a compile check: 275 edges, exit 0, 0 errors, 0 warnings, 4 m 14.6 s.",
+ "hf_revision": "ed59f92082b1e93c0e96d60a8b11aab089b52f09",
+ "engine_change": "b1daaa28"
+}

@@ -1,0 +1,220 @@
+Test project /home/chris/dev/strata-gfx906/build-text-rocm10-v45
+      Start  1: conversation_cache_test
+ 1/77 Test  #1: conversation_cache_test ...........   Passed    0.16 sec
+      Start  2: conversation_split_failure_test
+ 2/77 Test  #2: conversation_split_failure_test ...   Passed    0.00 sec
+      Start  3: conversation_memory_test
+ 3/77 Test  #3: conversation_memory_test ..........   Passed    0.00 sec
+      Start  4: conversation_file_test
+ 4/77 Test  #4: conversation_file_test ............   Passed    1.81 sec
+      Start  5: session_save_reclaim_test
+ 5/77 Test  #5: session_save_reclaim_test .........   Passed    0.00 sec
+      Start  6: file_expert_source_test
+ 6/77 Test  #6: file_expert_source_test ...........   Passed    0.27 sec
+      Start  7: vmm_test
+ 7/77 Test  #7: vmm_test ..........................   Passed    0.04 sec
+      Start  8: expert_profile_save_test
+ 8/77 Test  #8: expert_profile_save_test ..........   Passed    0.03 sec
+      Start  9: expert_profile_version_test
+ 9/77 Test  #9: expert_profile_version_test .......   Passed    0.02 sec
+      Start 10: conversation_snapshot_test
+10/77 Test #10: conversation_snapshot_test ........***Skipped   0.04 sec
+      Start 11: conversation_copy_test
+11/77 Test #11: conversation_copy_test ............***Skipped   0.04 sec
+      Start 12: conversation_validation_test
+12/77 Test #12: conversation_validation_test ......   Passed    0.08 sec
+      Start 13: dequant_s2_parity
+13/77 Test #13: dequant_s2_parity .................***Failed    0.11 sec
+      Start 14: s2_gemv_parity
+14/77 Test #14: s2_gemv_parity ....................***Failed    0.05 sec
+      Start 15: iq_parity_fixtures
+15/77 Test #15: iq_parity_fixtures ................   Passed    0.24 sec
+      Start 16: iq_parity
+16/77 Test #16: iq_parity .........................***Failed    0.04 sec
+      Start 17: mmvq_multi_parity
+17/77 Test #17: mmvq_multi_parity .................***Failed    0.04 sec
+      Start 18: mmvq_multi_parity_cuda_layout
+18/77 Test #18: mmvq_multi_parity_cuda_layout .....***Failed    0.04 sec
+      Start 19: mmvq_il_parity
+19/77 Test #19: mmvq_il_parity ....................***Failed    2.45 sec
+      Start 20: dequant_wide_parity
+20/77 Test #20: dequant_wide_parity ...............***Failed    0.05 sec
+      Start 21: iq_multi_parity
+21/77 Test #21: iq_multi_parity ...................***Failed    0.04 sec
+      Start 22: native_grouped_parity
+22/77 Test #22: native_grouped_parity .............***Failed    0.04 sec
+      Start 23: mmvf_rows_parity
+23/77 Test #23: mmvf_rows_parity ..................***Failed    0.05 sec
+      Start 24: native_grouped_fused_parity
+24/77 Test #24: native_grouped_fused_parity .......***Failed    0.04 sec
+      Start 25: gfx906_gdn_rec_head
+25/77 Test #25: gfx906_gdn_rec_head ...............***Failed    0.16 sec
+      Start 26: shared_expert_parity
+26/77 Test #26: shared_expert_parity ..............***Failed    0.04 sec
+      Start 27: verify_parity
+27/77 Test #27: verify_parity .....................***Failed    0.04 sec
+      Start 28: gr_parity
+28/77 Test #28: gr_parity .........................***Failed    0.04 sec
+      Start 29: gdn_parity
+29/77 Test #29: gdn_parity ........................***Failed    0.11 sec
+      Start 30: s2_gemv_q8_parity
+30/77 Test #30: s2_gemv_q8_parity .................***Failed    0.05 sec
+      Start 31: sampler_parity
+31/77 Test #31: sampler_parity ....................***Failed    0.04 sec
+      Start 32: spec_verify_parity
+32/77 Test #32: spec_verify_parity ................***Failed    0.05 sec
+      Start 33: sampler_parity_one_block
+33/77 Test #33: sampler_parity_one_block ..........***Failed    0.04 sec
+      Start 34: sampler_parity_old
+34/77 Test #34: sampler_parity_old ................***Failed    0.04 sec
+      Start 35: decode_cluster_parity
+35/77 Test #35: decode_cluster_parity .............***Failed    0.04 sec
+      Start 36: rope_parity
+36/77 Test #36: rope_parity .......................***Failed    0.05 sec
+      Start 37: quantize_act_parity
+37/77 Test #37: quantize_act_parity ...............***Failed    0.05 sec
+      Start 38: route_window_parity
+38/77 Test #38: route_window_parity ...............***Failed    0.06 sec
+      Start 39: route_resident_parity
+39/77 Test #39: route_resident_parity .............***Failed    0.04 sec
+      Start 40: router_top10_parity
+40/77 Test #40: router_top10_parity ...............***Failed    0.04 sec
+      Start 41: native_multi_parity
+41/77 Test #41: native_multi_parity ...............***Failed    0.05 sec
+      Start 42: kv_steps_parity
+42/77 Test #42: kv_steps_parity ...................***Failed    0.04 sec
+      Start 43: resident_plan_parity
+43/77 Test #43: resident_plan_parity ..............***Failed    0.05 sec
+      Start 44: gr_multi_parity
+44/77 Test #44: gr_multi_parity ...................***Failed    0.17 sec
+      Start 45: hc_persist_parity
+45/77 Test #45: hc_persist_parity .................***Failed    0.53 sec
+      Start 46: hc_persist_default_off
+46/77 Test #46: hc_persist_default_off ............***Failed    0.52 sec
+      Start 47: s_gemv_parity
+47/77 Test #47: s_gemv_parity .....................***Failed    0.05 sec
+      Start 48: elementwise_parity
+48/77 Test #48: elementwise_parity ................***Failed    0.04 sec
+      Start 49: bf16_gemv_parity
+49/77 Test #49: bf16_gemv_parity ..................***Failed    0.05 sec
+      Start 50: s_gemv_q8k_parity
+50/77 Test #50: s_gemv_q8k_parity .................***Failed    0.04 sec
+      Start 51: qsa_parity
+51/77 Test #51: qsa_parity ........................***Failed    0.07 sec
+      Start 52: qsa_topk_parity
+52/77 Test #52: qsa_topk_parity ...................***Failed    0.04 sec
+      Start 53: qsa_topk_parity_reg_always
+53/77 Test #53: qsa_topk_parity_reg_always ........***Failed    0.04 sec
+      Start 54: ple_parity
+54/77 Test #54: ple_parity ........................***Failed    0.03 sec
+      Start 55: kv_q8_parity
+55/77 Test #55: kv_q8_parity ......................***Failed    0.04 sec
+      Start 56: kv_stream_parity
+56/77 Test #56: kv_stream_parity ..................***Failed    0.05 sec
+      Start 57: kv_window_parity
+57/77 Test #57: kv_window_parity ..................***Failed    0.04 sec
+      Start 58: kv_hybrid_parity
+58/77 Test #58: kv_hybrid_parity ..................***Failed    0.04 sec
+      Start 59: kv_q4_parity
+59/77 Test #59: kv_q4_parity ......................***Failed    0.04 sec
+      Start 60: verify_batch_parity
+60/77 Test #60: verify_batch_parity ...............***Failed    0.05 sec
+      Start 61: batch_rows_parity
+61/77 Test #61: batch_rows_parity .................***Failed    0.05 sec
+      Start 62: cvec_parity
+62/77 Test #62: cvec_parity .......................***Failed    0.05 sec
+      Start 63: s2_expert_grouped_parity
+63/77 Test #63: s2_expert_grouped_parity ..........***Failed    0.13 sec
+      Start 64: platform_memory_test
+64/77 Test #64: platform_memory_test ..............***Failed    0.17 sec
+      Start 65: pinned_shared_test
+65/77 Test #65: pinned_shared_test ................   Passed    0.05 sec
+      Start 66: ple_reader_selftest
+66/77 Test #66: ple_reader_selftest ...............   Passed    6.32 sec
+      Start 67: cuda_device_selftest
+67/77 Test #67: cuda_device_selftest ..............***Failed    0.04 sec
+      Start 68: message_boundary_test
+68/77 Test #68: message_boundary_test .............   Passed    0.00 sec
+      Start 69: split_ring_test
+69/77 Test #69: split_ring_test ...................   Passed    0.00 sec
+      Start 70: conv_cache_test
+70/77 Test #70: conv_cache_test ...................   Passed    0.00 sec
+      Start 71: draft_kv_plan_test
+71/77 Test #71: draft_kv_plan_test ................   Passed    0.00 sec
+      Start 72: coupled_draft_test
+72/77 Test #72: coupled_draft_test ................   Passed    0.00 sec
+      Start 73: spec_prob_test
+73/77 Test #73: spec_prob_test ....................   Passed    5.28 sec
+      Start 74: bf16_bits_test
+74/77 Test #74: bf16_bits_test ....................   Passed    2.00 sec
+      Start 75: batch_rows_test
+75/77 Test #75: batch_rows_test ...................   Passed    0.00 sec
+      Start 76: batch_groups_test
+76/77 Test #76: batch_groups_test .................   Passed    0.00 sec
+      Start 77: nvfp4_cpu_parity
+77/77 Test #77: nvfp4_cpu_parity ..................   Passed    0.40 sec
+
+32% tests passed, 52 tests failed out of 77
+
+Total Test time (real) =  23.14 sec
+
+The following tests did not run:
+	 10 - conversation_snapshot_test (Skipped)
+	 11 - conversation_copy_test (Skipped)
+
+The following tests FAILED:
+	 13 - dequant_s2_parity (Failed)
+	 14 - s2_gemv_parity (Failed)
+	 16 - iq_parity (Failed)
+	 17 - mmvq_multi_parity (Failed)
+	 18 - mmvq_multi_parity_cuda_layout (Failed)
+	 19 - mmvq_il_parity (Failed)
+	 20 - dequant_wide_parity (Failed)
+	 21 - iq_multi_parity (Failed)
+	 22 - native_grouped_parity (Failed)
+	 23 - mmvf_rows_parity (Failed)
+	 24 - native_grouped_fused_parity (Failed)
+	 25 - gfx906_gdn_rec_head (Failed)
+	 26 - shared_expert_parity (Failed)
+	 27 - verify_parity (Failed)
+	 28 - gr_parity (Failed)
+	 29 - gdn_parity (Failed)
+	 30 - s2_gemv_q8_parity (Failed)
+	 31 - sampler_parity (Failed)
+	 32 - spec_verify_parity (Failed)
+	 33 - sampler_parity_one_block (Failed)
+	 34 - sampler_parity_old (Failed)
+	 35 - decode_cluster_parity (Failed)
+	 36 - rope_parity (Failed)
+	 37 - quantize_act_parity (Failed)
+	 38 - route_window_parity (Failed)
+	 39 - route_resident_parity (Failed)
+	 40 - router_top10_parity (Failed)
+	 41 - native_multi_parity (Failed)
+	 42 - kv_steps_parity (Failed)
+	 43 - resident_plan_parity (Failed)
+	 44 - gr_multi_parity (Failed)
+	 45 - hc_persist_parity (Failed)
+	 46 - hc_persist_default_off (Failed)
+	 47 - s_gemv_parity (Failed)
+	 48 - elementwise_parity (Failed)
+	 49 - bf16_gemv_parity (Failed)
+	 50 - s_gemv_q8k_parity (Failed)
+	 51 - qsa_parity (Failed)
+	 52 - qsa_topk_parity (Failed)
+	 53 - qsa_topk_parity_reg_always (Failed)
+	 54 - ple_parity (Failed)
+	 55 - kv_q8_parity (Failed)
+	 56 - kv_stream_parity (Failed)
+	 57 - kv_window_parity (Failed)
+	 58 - kv_hybrid_parity (Failed)
+	 59 - kv_q4_parity (Failed)
+	 60 - verify_batch_parity (Failed)
+	 61 - batch_rows_parity (Failed)
+	 62 - cvec_parity (Failed)
+	 63 - s2_expert_grouped_parity (Failed)
+	 64 - platform_memory_test (Failed)
+	 67 - cuda_device_selftest (Failed)
+Errors while running CTest
+Output from these tests are in: /home/chris/dev/strata-gfx906/build-text-rocm10-v45/Testing/Temporary/LastTest.log
+Use "--rerun-failed --output-on-failure" to re-run the failed cases verbosely.

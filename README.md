@@ -2,22 +2,23 @@
 
 **Source version: Strata v0.1.45 / `477ac13c`** (merged into `gfx906` on 2026-10-17; the build check on
 T5810 is recorded in [docs/GFX906.md](docs/GFX906.md)).
-**Deployed, not yet running:** on owner instruction ("deploy, I restart myself") the **v0.1.44.1**
-artifacts were installed on 2026-10-14 ~19:24 UTC with `install -m 0755` while 8082 kept running:
-`build-text-rocm10/strata` is now **`050b83e6…`** and `build-vision-rocm10/bin/strata-vision` is
-**`f8a183ff…`**. The running processes (server 1734867, vision 1734877, text 1734906, up since
-2026-10-14 18:16:13-18:16:18 UTC — the owner restarted 8082 again at 18:16, on the v0.1.43.1 pair
-that had run since 2026-10-13 06:40 UTC) still execute the previous inodes — **v0.1.43.1** text
-`11b847dc…` and vision `709fc4d2…`, both shown as `(deleted)` — so `/metrics` still reports engine
-`0.1.43.1` until the owner restarts 8082. Backups: text `strata.v01431-11b847dc.bak`, vision
-`strata-vision.v01431-709fc4d2.bak` (both restore via `rollback-v441.sh`, which also restores the
-previous `strata-current.sh` expectations); the v0.1.43 `7695859a` artifact `dd7eaf97…` stays as
-`strata.v0143-dd7eaf97.bak` (`rollback-v431.sh`), the v0.1.42 copy-fix `ff24e50b…` as
-`strata.v0142-copyfix-ff24e50b.bak`, the plain v0.1.42 `0550f3f2…` as `strata.v0142-0550f3f2.bak`,
-the earlier **v0.1.40.1** artifact `bc1102ba…` as `strata-v0.1.40.1`. After the restart,
-`bash /home/chris/mi50-t5810/scripts/verify-v441.sh` checks both deployed hashes, the engine version
-(`0.1.44.1`), the mapped ROCm 10 runtime, one real `STRATA OK` generation and `strata-current.sh`.
-`run-iq3-s.json` is byte-unchanged this round; the owner starts the service manually.
+**Deployed, not yet running:** on owner instruction ("deploy, I restart myself") the **v0.1.45** text
+engine was installed on 2026-10-17 23:15 UTC with `install -m 0755` while 8082 kept running:
+`build-text-rocm10/strata` is now **`1ba389de…`**. The running processes (server 1786203, vision
+1786213, text 1786240, up since 2026-10-14 ~20:55 UTC) still execute the previous inode — **v0.1.44.1**
+text `050b83e6…`, shown as `(deleted)` — so `/metrics` still reports engine `0.1.44.1` until the owner
+restarts 8082. The vision encoder was **not** replaced: upstream changed nothing under `tools/vision` in
+`296b59d2..477ac13c` and the llama.cpp pin is unchanged, so `f8a183ff…` stays the current artifact and
+`build-vision-rocm10/bin/strata-vision` is untouched. Backups: text `strata.v01441-050b83e6.bak`
+(restore with `rollback-v45.sh`, which also restores the previous `strata-current.sh` expectations);
+older text backups `strata.v01431-11b847dc.bak`, `strata.v0143-dd7eaf97.bak` (`rollback-v431.sh`),
+`strata.v0142-copyfix-ff24e50b.bak`, `strata.v0142-0550f3f2.bak` and the **v0.1.40.1** artifact
+`strata-v0.1.40.1`; the v0.1.43.1 vision backup `strata-vision.v01431-709fc4d2.bak` stays
+(`rollback-v441.sh` restores that v0.1.43.1 pair). After the restart,
+`bash /home/chris/mi50-t5810/scripts/verify-v45.sh` checks the deployed text hash, the vision hash, the
+engine version (`0.1.45`), the mapped ROCm 10 runtime, one real `STRATA OK` generation and
+`strata-current.sh`. `run-iq3-s.json` is byte-unchanged this round (md5 `e45b9806…`); the owner starts
+the service manually.
 
 **Key features in this release:**
 - **Concurrent execution:** Multi-slot concurrent request batching and decoding across independent context sequences.

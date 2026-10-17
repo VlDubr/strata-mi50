@@ -1,0 +1,25 @@
+# v0.1.45 artifacts, 2026-10-17 23:17 UTC
+
+## staged (build check, text never executed)
+1ba389debc278dda5622c893989e54d9bfea398e2ffeca6255be25009c2d674e  build-text-rocm10-v45/strata
+d11f35e70e2b00932175685eba6f2ba07b47cb4b54c16d676ab649226f864f62  build-vision-rocm10-v45/bin/strata-vision
+build-text-rocm10-v45/strata 31053160 B
+build-vision-rocm10-v45/bin/strata-vision 48817712 B
+
+## deployed paths
+1ba389debc278dda5622c893989e54d9bfea398e2ffeca6255be25009c2d674e  build-text-rocm10/strata
+f8a183ffd518133ed5079f6edc9f98fc826b180b540d202c242bead2502bc75d  build-vision-rocm10/bin/strata-vision
+
+## backups
+050b83e6dbe14b71943a0b0c22044d952aaf3c1682e7659ed38874cb228a774c  build-text-rocm10/strata.v01441-050b83e6.bak
+11b847dcbce3fbf88d9a3d8673e6fa28545e0ee3448cb7d8b653083f79841bd0  build-text-rocm10/strata.v01431-11b847dc.bak
+709fc4d2c34abbede8b17cb93a4a9571c931338339d3848691c5b59f156d8452  build-vision-rocm10/bin/strata-vision.v01431-709fc4d2.bak
+
+## running processes
+PID 1786203  /usr/bin/python3.14
+PID 1786213  /home/chris/dev/strata-gfx906/build-vision-rocm10/bin/strata-vision
+PID 1786240  /home/chris/dev/strata-gfx906/build-text-rocm10/strata (deleted)
+
+## ldd (ROCm 10 only)
+20
+0

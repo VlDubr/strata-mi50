@@ -1,0 +1,12 @@
+=== deploy Sat Oct 17 11:15:19 PM UTC 2026 ===
+backup: 050b83e6dbe14b71943a0b0c22044d952aaf3c1682e7659ed38874cb228a774c  build-text-rocm10/strata.v01441-050b83e6.bak
+staged: 1ba389debc278dda5622c893989e54d9bfea398e2ffeca6255be25009c2d674e  build-text-rocm10-v45/strata
+deployed text: 1ba389debc278dda5622c893989e54d9bfea398e2ffeca6255be25009c2d674e  build-text-rocm10/strata
+deployed vision (unchanged): f8a183ffd518133ed5079f6edc9f98fc826b180b540d202c242bead2502bc75d  build-vision-rocm10/bin/strata-vision
+health after: {"status": "ok", "max_context": 262144, "model": "Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S", "images": true, "api_key": false, "image_generation": false, "loaded": true, "service": "strata"}
+engine after: 0.1.44.1
+PID 1786203 exe: /usr/bin/python3.14
+PID 1786213 exe: /home/chris/dev/strata-gfx906/build-vision-rocm10/bin/strata-vision
+PID 1786240 exe: /home/chris/dev/strata-gfx906/build-text-rocm10/strata (deleted)
+e45b98065beb593df0e789355985f4df  run-iq3-s.json
+/dev/mapper/ubuntu--vg-ubuntu--lv  232G  201G   20G  92% /
