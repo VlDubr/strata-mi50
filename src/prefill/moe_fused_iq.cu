@@ -1453,15 +1453,25 @@ void experts_native(const Batch& b, const NativeGeom& g, int n_expert, int64_t n
 #define STRATA_NW_GU(T) do { if (occ_gu) native_w11_kernel<T, true, true, NW_LB><<<g_gu, NW_THREADS, 0, s>>>(b, g, tb, xa8, src, ha8, nullptr); else native_w11_kernel<T, true><<<g_gu, NW_THREADS, 0, s>>>(b, g, tb, xa8, src, ha8, nullptr); } while (0)
         // STRATA_PF_F16=1: gfx11's F16 matrix cores - the K-quants' kernels (moe_f16_kq.cu) and native_f16_kernel for
         // f16_gu / f16_d (gfx12's WMMA layout differs, so it keeps the int8 kernels)
+#if defined(STRATA_HIP_GFX906)
+        // gfx906 (this fork): the F16 matrix-core path is gfx11-only - moe_f16_common.cuh's STRATA_F16_DEVICE is 0
+        // here, so every kernel it launches compiles to its trap body - and moe_f16_kq.cu is not in this build's
+        // source list. STRATA_PF_F16=1 on MI50/MI60 keeps the int8 native kernels.
+        const bool f16 = false;
+#else
         const bool f16 = !d.w12 && f16::requested();
+#endif
         const bool f16_wide = f16::pick_bn(n, n_expert) == 2 * kTileRows;
 #define STRATA_F16_LAUNCH(T, GU, NFB, ACT, OUT, DM) do { \
     const unsigned grid_f = (unsigned) std::max<int64_t>(1, tiles * (NFB)); \
     if (f16_wide) native_f16_kernel<T, GU, 2 * kTileRows><<<grid_f, f16::THREADS, 0, s>>>(b, g, tb, ACT, src, OUT, DM); \
     else native_f16_kernel<T, GU, kTileRows><<<grid_f, f16::THREADS, 0, s>>>(b, g, tb, ACT, src, OUT, DM); \
 } while (0)
+#if !defined(STRATA_HIP_GFX906)   // gfx906 (this fork): moe_f16_kq.cu is not compiled here
         if (f16 && f16kq::covers(g.gu_type)) f16kq::gate_up(b, g, tb.ts, tb.tiles, tb.off, n, n_expert, tiles, xa8, src, ha8, s);
-        else if (f16 && f16_gu(g.gu_type)) {
+        else
+#endif
+        if (f16 && f16_gu(g.gu_type)) {
 #define STRATA_F16_GU(T) STRATA_F16_LAUNCH(T, true, f16::GU_NFB, xa8, ha8, nullptr)
             switch (g.gu_type) {
                 case T_IQ2_XXS: STRATA_F16_GU(T_IQ2_XXS); break;
@@ -1485,8 +1495,11 @@ void experts_native(const Batch& b, const NativeGeom& g, int n_expert, int64_t n
         }
 #undef STRATA_NW_GU
 #define STRATA_NW_D(T) do { if (occ_d) native_w11_kernel<T, false, true, NW_LB><<<g_d, NW_THREADS, 0, s>>>(b, g, tb, ha8, src, nullptr, dm); else native_w11_kernel<T, false><<<g_d, NW_THREADS, 0, s>>>(b, g, tb, ha8, src, nullptr, dm); } while (0)
+#if !defined(STRATA_HIP_GFX906)   // gfx906 (this fork): moe_f16_kq.cu is not compiled here
         if (f16 && f16kq::covers_down(g.d_type)) f16kq::down(b, g, tb.ts, tb.tiles, tb.off, n, n_expert, tiles, ha8, dm, s);
-        else if (f16 && f16_d(g.d_type)) {
+        else
+#endif
+        if (f16 && f16_d(g.d_type)) {
             if (g.d_type == T_Q2_0) STRATA_F16_LAUNCH(T_Q2_0, false, f16::D_NFB, ha8, nullptr, dm);
             else if (g.d_type == T_Q8_0) STRATA_F16_LAUNCH(T_Q8_0, false, f16::D_NFB, ha8, nullptr, dm);
             else STRATA_F16_LAUNCH(T_IQ4_NL, false, f16::D_NFB, ha8, nullptr, dm);
