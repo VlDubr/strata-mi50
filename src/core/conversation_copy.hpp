@@ -48,8 +48,8 @@ inline cudaError_t endpoint_kind(const void* p, bool& device, bool& accessible) 
     return cudaSuccess;
 }
 
-inline cudaError_t copy_nonblocking(void* dst, const void* src, size_t bytes) {
-    if (!bytes) return cudaSuccess;
+/// private_stream: this thread's stream on the current device, created on first use.
+inline cudaError_t private_stream(cudaStream_t& s) {
     int dev = 0;
     cudaError_t e = cudaGetDevice(&dev);
     if (e != cudaSuccess) return e;
@@ -60,14 +60,26 @@ inline cudaError_t copy_nonblocking(void* dst, const void* src, size_t bytes) {
         e = cudaStreamCreateWithFlags(&streams[(size_t) dev], cudaStreamNonBlocking);
         if (e != cudaSuccess) { streams[(size_t) dev] = nullptr; return e; }
     }
-    cudaStream_t s = streams[(size_t) dev];
+    s = streams[(size_t) dev];
+    return cudaSuccess;
+}
+
+/// `queued`: the copy is only queued on the private stream, and the caller synchronizes the device (or orders a
+/// later launch after it with order_after_queued) before anything reads the target or writes the source.
+/// A leg that stages through bounce scratch ignores `queued` and waits for the slice it queued: the scratch is
+/// this thread's, and returning early would let the next copy overwrite bytes the queue has not read.
+inline cudaError_t copy_nonblocking(void* dst, const void* src, size_t bytes, bool queued = false) {
+    if (!bytes) return cudaSuccess;
+    cudaStream_t s = nullptr;
+    cudaError_t e = private_stream(s);
+    if (e != cudaSuccess) return e;
 
     bool src_device = false, src_accessible = false, dst_device = false, dst_accessible = false;
     if (endpoint_kind(src, src_device, src_accessible) != cudaSuccess ||
         endpoint_kind(dst, dst_device, dst_accessible) != cudaSuccess) {
         // An endpoint the runtime refuses to classify: the behaviour before the bounce existed.
         e = cudaMemcpyAsync(dst, src, bytes, cudaMemcpyDefault, s);
-        if (e != cudaSuccess) return e;
+        if (e != cudaSuccess || queued) return e;
         e = cudaStreamSynchronize(s);
         if (e == cudaSuccess) core::progress_beat();   // #2049: a parked conversation is many of these
         return e;
@@ -80,7 +92,7 @@ inline cudaError_t copy_nonblocking(void* dst, const void* src, size_t bytes) {
     }
     if (src_device && dst_device) {
         e = cudaMemcpyAsync(dst, src, bytes, cudaMemcpyDeviceToDevice, s);
-        if (e != cudaSuccess) return e;
+        if (e != cudaSuccess || queued) return e;
         e = cudaStreamSynchronize(s);
         if (e == cudaSuccess) core::progress_beat();
         return e;
@@ -88,7 +100,7 @@ inline cudaError_t copy_nonblocking(void* dst, const void* src, size_t bytes) {
     if (src_device ? dst_accessible : src_accessible) {
         // The device blit only touches the endpoint whose mapping is stable for the allocation's lifetime.
         e = cudaMemcpyAsync(dst, src, bytes, src_device ? cudaMemcpyDeviceToHost : cudaMemcpyHostToDevice, s);
-        if (e != cudaSuccess) return e;
+        if (e != cudaSuccess || queued) return e;
         e = cudaStreamSynchronize(s);
         if (e == cudaSuccess) core::progress_beat();
         return e;
@@ -99,8 +111,8 @@ inline cudaError_t copy_nonblocking(void* dst, const void* src, size_t bytes) {
     thread_local Bounce* bounce = nullptr;   // never freed: process lifetime, like the streams
     if (bounce == nullptr) {
         void* p = nullptr;
-        const cudaError_t e = cudaHostAlloc(&p, kCopyBounceBytes, cudaHostAllocDefault);
-        if (e != cudaSuccess) return e;
+        const cudaError_t e0 = cudaHostAlloc(&p, kCopyBounceBytes, cudaHostAllocDefault);
+        if (e0 != cudaSuccess) return e0;
         bounce = new Bounce{static_cast<uint8_t*>(p)};
     }
     const bool to_host = src_device;   // device to plain host; the other plain case is plain host to device
@@ -168,6 +180,27 @@ inline std::vector<ConversationCheckpoint> copy_checkpoints_beating(const std::v
     out.reserve(cs.size());
     for (const auto& c : cs) out.push_back(copy_checkpoint_beating(c));
     return out;
+}
+
+/// Work queued on the legacy stream after this call starts after every copy this thread queued on the current
+/// device's private stream (an event the legacy stream waits for; no host wait).
+inline cudaError_t order_after_queued() {
+    cudaStream_t s = nullptr;
+    cudaError_t e = private_stream(s);
+    if (e != cudaSuccess) return e;
+    int dev = 0;
+    e = cudaGetDevice(&dev);
+    if (e != cudaSuccess) return e;
+    thread_local std::vector<cudaEvent_t> events;
+    if (dev < 0) dev = 0;
+    if ((size_t) dev >= events.size()) events.resize((size_t) dev + 1, nullptr);    // never destroyed: process lifetime
+    if (!events[(size_t) dev]) {
+        e = cudaEventCreateWithFlags(&events[(size_t) dev], cudaEventDisableTiming);
+        if (e != cudaSuccess) { events[(size_t) dev] = nullptr; return e; }
+    }
+    e = cudaEventRecord(events[(size_t) dev], s);
+    if (e != cudaSuccess) return e;
+    return cudaStreamWaitEvent(nullptr, events[(size_t) dev], 0);
 }
 
 } // namespace strata::core::conversation_detail
