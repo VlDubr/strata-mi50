@@ -18,7 +18,8 @@ older text backups `strata.v01431-11b847dc.bak`, `strata.v0143-dd7eaf97.bak` (`r
 `bash /home/chris/mi50-t5810/scripts/verify-v45.sh` checks the deployed text hash, the vision hash, the
 engine version (`0.1.45`), the mapped ROCm 10 runtime, one real `STRATA OK` generation and
 `strata-current.sh`. `run-iq3-s.json` is byte-unchanged this round (md5 `e45b9806…`); the owner starts
-the service manually.
+the service manually. The restart also turns on v0.1.45's request-side defaults and its new switches:
+see [New startup parameters in v0.1.45](#new-startup-parameters-in-v0145).
 
 **Key features in this release:**
 - **Concurrent execution:** Multi-slot concurrent request batching and decoding across independent context sequences.
@@ -290,10 +291,77 @@ To change engine tuning, edit the generated `strata-iq2_xs.json` and preserve it
 | `--vision` | Enables image token embedding ingestion support in the engine. |
 | `--vram-reserve-mib N` | Headroom reserved in GPU VRAM for the vision encoder process (e.g. `1024`). |
 | `--resident-budget-gib N` | RAM-tier budget for GGUF-in-place experts; remaining experts use the SSD/file tier. Experimental on gfx906 until revalidated. |
+| `--prefill-pipe N` | **New in v0.1.45.** Opt-in. Size a layer split's prompt chunks for its pipeline: `1` = today's chunk count evened out, a number > 1 = the rig's b/a in tokens, `0` = off. Default off; `STRATA_PREFILL_PIPE` is the fallback. Not measured on MI50. |
+| `--prompt-cache-spread` | **New in v0.1.45.** Opt-in. Keep prompt-cache checkpoints spread back from the end instead of keeping only the latest ones. Not measured on MI50. |
+| `--conversation-cache-park-gain N` | **New in v0.1.45.** `--serve`: park a conversation only after it advanced N tokens past the snapshot it would replace, so a turn that grew by a few hundred tokens does not rewrite a whole snapshot. Default `0` = park every turn. The T5810 config sets neither this nor `--conversation-cache-min-tokens` beyond its existing value. |
 
 With a multi-GPU config (`"gpu": [0, 1]`), the server wrapper supplies `--layer-split` from the config automatically; do **not** add a second `--layer-split` to `args`. The HTTP server serializes requests by default, but decodes concurrently up to the configured batch slots (`"parallel": N` in config / `--batch N` in engine args). API request fields such as `max_tokens` control the response length; they are not installer startup flags. This engine does not take llama.cpp-style `-c`, `-ngl`, or `--tensor-split` options.
 
 For the engine's complete option list, run `./engine/strata --help` after installation. The archived **v0.1.30** MI50 regression run had **40 passed, 1 skipped and 0 failed** out of 41 tests, plus **18/18** Python entrypoint/download-safety tests. Skips and excluded tests are described in the [evidence notes](docs/gfx906-results/20261001/README.md); these software checks do not establish production readiness or long-run stability.
+
+### New startup parameters in v0.1.45
+
+Upstream v0.1.45 added no new `setup.sh` or `serve/server.py` command-line option. It added three engine
+options (above), one server config key, and environment switches. The tables below list the ones that
+touch a gfx906 run. Every switch is opt-in unless the row says it is a default. None of them has an MI50
+or MI60 measurement in this fork; the numbers upstream quotes come from other cards. Put a switch in the
+run config's `"env"` block (the T5810 `run-iq3-s.json` already carries `GPU_MAX_HW_QUEUES`,
+`HSA_ENABLE_SDMA`, `HSA_FORCE_FINE_GRAIN_PCIE`, `STRATA_VERIFY_ALL_RESIDENT` and the ROCm 10 paths there);
+the server exports it to the engine at start.
+
+**Server config key (in the model JSON, not `args`):**
+
+| Key | Purpose |
+| --- | --- |
+| `"answer_room": false` | From `max_tokens` 1024 up, a thinking request with **no** budget now gets one: `max_tokens` minus `min(max(512, max_tokens/4), max_tokens/2)`, so the answer keeps about a quarter of the cap instead of being cut off inside the thinking. Set this key to `false` for the old behaviour. The T5810 `run-iq3-s.json` sets `reasoning_budget_tokens: 4096`, so this rule does not fire there; it fires only for a request that sends `"reasoning_budget_tokens": 0`. |
+
+**Behaviour that changed with no switch (applies on restart):**
+
+- A request that sends no sampling now gets the model card's defaults for its family and thinking state.
+  The order is: model card, then the config's `"sampling"` block, then the shared `POST /settings` values,
+  then the request's own fields (#2685). The T5810 config pins `"sampling": {"temperature": 0}`, so the
+  live service stays greedy; a config with no `"sampling"` block would stop being greedy by default.
+- `max_tokens` counts thinking, with the answer-room rule above (#2207-family change).
+- An engine option written as one entry of the config's `args` is split, and a JSON slip is reported with
+  its place (#2267).
+- Layer-split `auto` re-prices an unequal two-card rig before it applies the three-layer rule (#2644);
+  the log line names the rule that chose the split. `STRATA_SPLIT_UNIFORM=1` restores the old uniform
+  link-miss cost, and `STRATA_SPLIT_SPEED_SCALE=<float>` scales each stage's speed (a test seam).
+
+**Environment switches that reach a gfx906 run:**
+
+| Switch | Purpose and gfx906 status |
+| --- | --- |
+| `STRATA_FILE_CACHE_OLD_RULE=1/0` | The file tier's old room rule. **On gfx906 the old rule is the default** (#1752: ROCm suspends queues while a kernel reclaims around the HMM-tracked arena). The switch forces either way on any Linux build. |
+| `STRATA_PRIMARY_DEVICE=N` | Pick another visible ordinal as the primary device. Upstream documents it for Windows; unset or `0` is the default. |
+| `STRATA_SPLIT_OVERLAP=1` | Overlap a layer split's hand-off with a GPU-raised ready word (different cards only). Upstream measured it on 2x RX 7900 XTX. The T5810 config leaves it off; the fork's mapped-host hand-off stays the synchronized one. Untested on MI50. |
+| `STRATA_SPLIT_WAIT_MS=N` | Bound the reading stage's GPU wait for that flag (default 30000, `0` = no bound). Only meaningful with `STRATA_SPLIT_OVERLAP=1`. |
+| `STRATA_HANDOFF_PIPE=P` | A layer split hands a prompt chunk to the next card in P pieces (2..16), gated by events, on a persistent thread. Untested on MI50. |
+| `STRATA_SLOT_COPY_DIRECT=1`, `STRATA_SLOT_COPY_BATCHSYNC=1`, `STRATA_SLOT_CKPT_MOVE=1` | Faster admission: device-to-device running-state copy, one device sync for the queued copies, and a moved turn checkpoint. On gfx906 a copy whose endpoint is plain host memory still stages through this fork's pinned bounce scratch and waits for its slice, so `BATCHSYNC` only batches the device-accessible legs. Untested on MI50. |
+| `STRATA_CKPT_POOL=1`, `STRATA_CKPT_THREADS=1` | Save a checkpoint into a dropped one's vectors; save a split's stage parts at once. Untested on MI50. |
+| `STRATA_ADMIT_MERGE_FIRST=1` | An admission reads its last prompt tokens and its first token in one window (all-experts-resident only). Untested on MI50. |
+| `STRATA_PIPED_CONCURRENT=1` (+ `_PRIO`, `_UNPIN`, `STRATA_PIPED_READ_PIECE`, `STRATA_PIPED_DECODE_MIN_MS/_MAX_MS`) | Read a prompt on its own thread while the slot groups keep decoding. Upstream measured it on other rigs. Untested on MI50. |
+| `STRATA_BATCH_ATTN_ROWS=1`, `STRATA_BATCH_GDN_GROUPS=1` | One launch per window for block scores, top-k, decode attention, and the GDN recurrence. Not with KV streaming. Untested on MI50. |
+| `STRATA_KV_HOST_REGISTER=1/0` | Force the KV host copy's pinning method (`cudaHostRegister` vs `cudaHostAlloc`). The fork's mapped-host registration path is unchanged; the T5810 config sets neither. |
+| `STRATA_PCIE_BALANCE=1` | Per-layer PCIe balance. **CUDA only** (one GPU, no `--batch`, no `--pcie-frac`); inert on HIP. |
+| `STRATA_ROCBLAS_TUNING=<file-or-dir>`, `STRATA_ROCBLAS_VERBOSE=1` | Use a measured rocBLAS solution table for the FP16 prompt GEMMs. Upstream ships a gfx103x table only; make your own with `tools/hip/tune_rocblas` for another card. No MI50 table exists. |
+| `STRATA_HC_PERSIST=1` | Run the verifier's hyper-connection read as one persistent kernel (HIP, 80 resident blocks, two grid barriers instead of three launches). Upstream wrote it for 32-lane waves; this fork keeps logical wave32 on MI50's wave64. Untested on MI50. |
+| `STRATA_SELECT_SIMT=1\|2` | The FP32 tiled block scorer instead of the tensor-core one; the comment covers "any HIP card". Its summation order differs, so output is not bitwise against the default. Untested on MI50. |
+| `STRATA_SIDE_MIXER=N` | The side-projection q8_1 interleave copies. Upstream's last v0.1.45 commit requires two or more columns; `=2` on a 1-column window threw on Q2_0 packs. Leave unset. |
+
+**Compiled out of the gfx906 build, or gated to other cards:** `STRATA_PF_F16` and `STRATA_PF_F16_BN` (the
+gfx11 F16 matrix-core prompt path) are compiled out by this fork's fix `b1daaa28`, so setting them on an
+MI50 keeps the int8 native kernels instead of launching a trapping kernel. `STRATA_MMQ_TAB` and
+`STRATA_MMQ_DIRECT` sit behind the CUDA-only `STRATA_MMQ_TAB` CMake option, so the gfx906 engine has no
+pointer-table MMQ to select. `STRATA_PROMPT_ATTN_Q4_TC` (RTX 20 / sm_75 tensor cores), `STRATA_RDNA2_SGEMM`
+(gfx103x) and `STRATA_SM75_PERF` (Turing) do not apply to gfx906.
+
+**Read by the HIP code but not validated on MI50:** `STRATA_QSA_SPLIT_ATTN` (split decode attention
+through the int8 tensor-core kernel; upstream gates it to int8 KV with sm_80+ tensor cores),
+`STRATA_SCORES_THREAD` (exact threaded scorer; upstream's defaults cover gfx1100 and gfx12), and
+`STRATA_ATTN_V3`, `STRATA_ATTN_MERGE_V2`, `STRATA_Q2_WARP`, `STRATA_QIL`, `STRATA_XN_F16`,
+`STRATA_GR_DOWN_TG`, `STRATA_GR_UP75`, `STRATA_TOPK_SPLIT`, `STRATA_TOPK_REG_MIN_BLOCKS` and the other
+kernel-level switches. Do not turn them on for the live MI50 service without a numeric check first.
 
 ## Project background
 
