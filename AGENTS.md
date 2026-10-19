@@ -57,6 +57,11 @@ All project documentation and maintenance notes must be written in English. Pres
    prompt per prompt-phase second, reused K/V tokens counted). The effective number shows how fast a warm
    turn is accepted; it is not compute throughput, so never quote it as a prefill speed. Record how each
    number was measured, and keep the raw payload under `docs/gfx906-results/`.
+11. **Resolve every upstream-merge conflict by the recorded pattern, and carry no workflow files.** Fork behavior
+    wins in a conflict. Take upstream's side only where the two do not overlap. Rebuild the fork's gating on top
+    of upstream's new structure instead of keeping the old shape. Record each conflict in `docs/GFX906.md` —
+    both sides' intent and the resolution — in the same merge commit. Merge no `.github/workflows/` file:
+    this fork carries none, and the origin token cannot push them.
 
 ## Upstream navigation
 

@@ -19,6 +19,8 @@ This fork retains corrupt files and conflicting inventories and fails explicitly
 falls back to mutable main. Verify the source and use a separate output directory before retrying.
 """
 import argparse
+import collections
+import concurrent.futures
 import hashlib
 import json
 import math
@@ -33,6 +35,7 @@ import urllib.request
 # Keep acceptance reproducible: never fall back to mutable main or change resumed tensors' source identity.
 # Upstream honours STRATA_MTP_REVISION (e.g. main); this fork ignores it so the acceptance identity stays fixed.
 # #495: HF_ENDPOINT (a mirror, e.g. https://hf-mirror.com) serves the same revision; the SHA256 checks below still apply.
+# #214: upstream's STRATA_ALLOW_UNPINNED escape is not taken either: a gone revision stops the fetch (resolve_repo).
 MTP_REVISION = PINNED_REVISION = REVISION = "de4b8e4d43b917e7706784d8bb445c9af86a3540"
 HF_ENDPOINT = (os.environ.get("HF_ENDPOINT") or "").strip().rstrip("/") or "https://huggingface.co"
 REPO = HF_ENDPOINT + "/Qwen/Qwen3.8-Flash-Next/resolve/%s/" % REVISION
@@ -151,6 +154,42 @@ def get(url, start=None, end=None, retries=4):
             print("retry %s: %s" % (url, e), file=sys.stderr)
 
 
+def connections():
+    """Ranges read at once: STRATA_DL_CONNECTIONS (the setting of setup's downloads), else 8; 1 reads them one by one."""
+    try:
+        n = int((os.environ.get("STRATA_DL_CONNECTIONS") or "").strip() or 8)
+    except ValueError:
+        n = 8
+    return max(1, min(n, 32))
+
+
+def ranged(url, start, last, chunk, workers):
+    """The bytes start..last of `url` in order, read in `chunk`-sized ranges with `workers` of them in flight.  Each range is
+    checked by get() (a 206 with the range asked for), so a server that ignores Range still fails here."""
+    spans = []
+    pos = start
+    while pos <= last:
+        spans.append((pos, min(pos + chunk - 1, last)))
+        pos = spans[-1][1] + 1
+    if workers <= 1 or len(spans) <= 1:
+        for a, b in spans:
+            yield get(url, a, b)
+        return
+    todo = iter(spans)
+    window = collections.deque()
+    with concurrent.futures.ThreadPoolExecutor(min(workers, len(spans))) as ex:
+        for a, b in todo:
+            window.append(ex.submit(get, url, a, b))
+            if len(window) >= workers:
+                break
+        while window:
+            data = window.popleft().result()
+            for a, b in todo:
+                window.append(ex.submit(get, url, a, b))
+                break
+            yield data
+
+
 def check_range(status, content_range, start, end):
     """#327: a range read is only what was asked for when the server says so: 206 and `bytes START-END/...`."""
     if status != 206:
@@ -250,7 +289,8 @@ def fetch(out, only):
     if shutil.disk_usage(out).free < remaining + reserve:
         raise RuntimeError("MTP source + 2 GiB outputs + 4 GiB disk safety floor do not fit; nothing deleted")
     manifest = []
-    chunk = 64 << 20
+    workers = connections()
+    chunk = (32 if workers > 1 else 64) << 20
     for r in rows:
         if only and only not in r["name"]:
             continue
@@ -263,12 +303,11 @@ def fetch(out, only):
             raise RuntimeError("corrupt MTP tensor; refusing to overwrite: " + path)
         with open(path, "ab") as f:
             pos = r["start"] + have
-            while pos <= r["end"]:
-                end = min(pos + chunk - 1, r["end"])
-                if shutil.disk_usage(out).free < (4 << 30) + end - pos + 1:
+            for data in ranged(REPO + r["shard"], pos, r["end"], chunk, workers):   # 0.2.0: several connections in flight
+                if shutil.disk_usage(out).free < (4 << 30) + len(data) + 1:
                     raise RuntimeError("MTP disk safety floor reached; partial tensors retained")
-                f.write(get(REPO + r["shard"], pos, end))
-                pos = end + 1
+                f.write(data)
+                pos += len(data)
                 print("%s %.0f%%" % (r["name"], 100 * (pos - r["start"]) / r["bytes"]), file=sys.stderr)
         if os.path.getsize(path) != r["bytes"]:
             sys.exit("%s: size %d != %d" % (path, os.path.getsize(path), r["bytes"]))

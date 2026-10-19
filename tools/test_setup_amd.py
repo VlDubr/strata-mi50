@@ -451,13 +451,51 @@ class CalibrationKey(unittest.TestCase):
                 self.assertIsNone(setup.setup_calibration(cfg, hip=True))             # Windows HIP: defaults for now
 
 
-class WindowsHipVision(unittest.TestCase):
-    def test_no_cpu_encoder_on_windows(self):
-        with mock.patch.object(setup, "WIN", True), mock.patch.object(setup, "warn", lambda *a: None):
-            self.assertEqual(setup.hip_vision("cpu"), "none")
-            self.assertEqual(setup.hip_vision("yes"), "none")
-        with mock.patch.object(setup, "WIN", False), mock.patch.object(setup, "warn", lambda *a: None):
-            self.assertEqual(setup.hip_vision("cpu"), "cpu")
+class HipVisionWish(unittest.TestCase):
+    """AMD pictures are on by default, on Linux and Windows: the wish is "gpu" (hip_reader() settles it against the readers the
+    engine folder carries: the HIP one, else the CPU one), "cpu" when asked for, "none" for no.
+    Fork: the GPU reader is opt-in (--experimental-gfx906, Linux gfx906 only); every other card reads on the CPU."""
+
+    def test_wish(self):
+        for win in (True, False):
+            with mock.patch.object(setup, "WIN", win):
+                self.assertEqual(setup.hip_vision("cpu"), "cpu")
+                self.assertEqual(setup.hip_vision("no"), "none")
+                self.assertEqual(setup.hip_vision("none"), "none")
+                # owner decision 2026-10-18: nothing asked / yes = the CPU reader under 24 GB, the GPU reader from 24 GB; gpu / cpu are kept
+                self.assertEqual(setup.hip_vision(None, 16.0), "cpu")
+                self.assertEqual(setup.hip_vision("yes", 16.0), "cpu")
+                # fork: without the opt-in every AMD card reads pictures on the CPU, whatever the tier said
+                self.assertEqual(setup.hip_vision(None, 23.9), "cpu")
+                self.assertEqual(setup.hip_vision("gpu"), "cpu")
+
+    def test_wish_gfx906_opt_in(self):
+        with mock.patch.object(setup, "WIN", False), mock.patch.object(setup.sys, "platform", "linux"):
+            self.assertEqual(setup.hip_vision(None, 23.9, experimental_gfx906=True, archs=["gfx906"]), "gpu")
+            self.assertEqual(setup.hip_vision(None, 16.0, experimental_gfx906=True, archs=["gfx906"]), "cpu")
+            self.assertEqual(setup.hip_vision("gpu", 16.0, experimental_gfx906=True, archs=["gfx906"]), "gpu")
+            self.assertEqual(setup.hip_vision("yes", 23.9, experimental_gfx906=True,
+                                              archs=["gfx906", "gfx1201"]), "cpu")   # mixed cards: CPU reader
+            self.assertEqual(setup.hip_vision(None, 32.0, experimental_gfx906=True, archs=["gfx906"]), "gpu")
+            self.assertEqual(setup.hip_vision("cpu", 32.0, experimental_gfx906=True, archs=["gfx906"]), "cpu")
+
+    def test_reader_settled_against_the_engine_folder(self):
+        for win, suffix in ((False, ""), (True, ".exe")):
+            with tempfile.TemporaryDirectory() as d, mock.patch.object(setup, "WIN", win),                     mock.patch.object(setup, "warn", lambda *a: None):
+                eng = Path(d)
+                (eng / ("strata-vision" + suffix)).write_bytes(b"x")
+                self.assertEqual(setup.hip_reader(eng, "gpu", {"arch": "gfx1201"})[0], "cpu")        # no HIP reader: the CPU one
+                (eng / ("strata-vision-hip" + suffix)).write_bytes(b"x")
+                mode, r = setup.hip_reader(eng, "gpu", {"arch": "gfx1201"})
+                self.assertEqual((mode, r.exe.name, r.cpu_exe.name),
+                                 ("gpu", "strata-vision-hip" + suffix, "strata-vision" + suffix))
+                (eng / "BUILD.json").write_text('{"vision_archs": ["gfx1100"]}')
+                self.assertEqual(setup.hip_reader(eng, "gpu", {"arch": "gfx1201"})[0], "cpu")        # the card is not in its build
+                self.assertEqual(setup.hip_reader(eng, "gpu", {"arch": "gfx1100"})[0], "gpu")
+                self.assertEqual(setup.hip_reader(eng, "cpu", {"arch": "gfx1100"})[0], "cpu")
+                (eng / ("strata-vision" + suffix)).unlink()
+                (eng / ("strata-vision-hip" + suffix)).unlink()
+                self.assertEqual(setup.hip_reader(eng, "gpu", {"arch": "gfx1100"})[0], "none")
 
 
 class HipRuntimeBesideExe(unittest.TestCase):

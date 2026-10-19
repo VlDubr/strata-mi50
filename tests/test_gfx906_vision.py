@@ -14,16 +14,19 @@ CARD = dict(index=0, arch="gfx906", name="MI50", vram_gb=32)
 
 class HipVision(unittest.TestCase):
     def test_choice_requires_linux_opt_in_and_only_gfx906(self):
-        with patch.object(setup, "WIN", False), patch.object(setup.sys, "platform", "linux"), contextlib.redirect_stdout(io.StringIO()):
+        with patch.object(setup, "WIN", False), patch.object(setup.sys, "platform", "linux"), \
+                contextlib.redirect_stdout(io.StringIO()):
             for choice in ("gpu", "yes"):
                 self.assertEqual(setup.hip_vision(choice, experimental_gfx906=True, archs=["gfx906"]), "gpu")
-                self.assertEqual(setup.hip_vision(choice, archs=["gfx906"]), "none")
+                # 0.2.0: the CPU reader is the fallback everywhere, so a gated card reads on the CPU (not "none")
+                self.assertEqual(setup.hip_vision(choice, archs=["gfx906"]), "cpu")
                 self.assertEqual(setup.hip_vision(choice, experimental_gfx906=True,
-                                                archs=["gfx906", "gfx1201"]), "none")
+                                                archs=["gfx906", "gfx1201"]), "cpu")
         with patch.object(setup, "WIN", True), contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(setup.hip_vision("gpu", experimental_gfx906=True, archs=["gfx906"]), "none")
-        with patch.object(setup, "WIN", False), patch.object(setup.sys, "platform", "darwin"), contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(setup.hip_vision("gpu", experimental_gfx906=True, archs=["gfx906"]), "none")
+            self.assertEqual(setup.hip_vision("gpu", experimental_gfx906=True, archs=["gfx906"]), "cpu")
+        with patch.object(setup, "WIN", False), patch.object(setup.sys, "platform", "darwin"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(setup.hip_vision("gpu", experimental_gfx906=True, archs=["gfx906"]), "cpu")
 
     def test_mode_changes_rebuild_encoder_but_do_not_rebuild_text_engine(self):
         with tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
@@ -47,7 +50,7 @@ class HipVision(unittest.TestCase):
             def build(src, bdir, target, defs, *_):
                 built.append((bdir.name, target, defs))
                 (bdir / "bin").mkdir(parents=True, exist_ok=True)
-                (bdir / "bin" / setup.VEXE).touch()
+                (bdir / "bin" / (setup.HVEXE if bdir.name == "build-vision-hip" else setup.VEXE)).touch()
 
             stack.enter_context(patch.object(setup, "cmake_build", side_effect=build))
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
@@ -58,13 +61,16 @@ class HipVision(unittest.TestCase):
                                        experimental_gfx906=True)
             self.assertEqual(built, [])
             setup.build_engine_hip(CARD, "unused", "gpu", experimental_gfx906=True)
-            self.assertEqual(json.loads(stamp.read_text())["vision"], "gpu")
+            stamp_meta = json.loads(stamp.read_text())
+            self.assertEqual(stamp_meta["vision"], "gpu")
+            self.assertEqual(stamp_meta["vision_archs"], ["gfx906"])
             self.assertEqual(built[0][:2], ("build-vision-hip", "strata-vision"))
-            for flag in ("-DSTRATA_VISION_HIP=ON", "-DCMAKE_HIP_ARCHITECTURES=gfx906",
-                         "-DSTRATA_EXPERIMENTAL_GFX906=ON"):
+            for flag in ("-DSTRATA_VISION_HIP=ON", "-DSTRATA_VISION_HIP_ARCHS=gfx906"):
                 self.assertIn(flag, built[0][2])
+            self.assertNotIn("-DSTRATA_EXPERIMENTAL_GFX906=ON", built[0][2])   # the archs flag selects gfx906 now
             setup.build_engine_hip(CARD, "unused", "gpu", experimental_gfx906=True)
             self.assertEqual(len(built), 1)
+            (eng / setup.VEXE).unlink()                        # force the CPU encoder rebuild for the "cpu" mode
             setup.build_engine_hip(CARD, "unused", "cpu", experimental_gfx906=True)
             self.assertEqual(built[1][:2], ("build-vision", "strata-vision"))
             self.assertIn("-DSTRATA_VISION_HIP=OFF", built[1][2])

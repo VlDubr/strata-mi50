@@ -4,6 +4,9 @@ bench/prompts/** -text
 # launchers keep their platform line endings wherever the repository is cloned
 *.sh text eol=lf
 *.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+bin/strata text eol=lf
 
 # Raw audit logs retain exact bytes and intentional CLI trailing whitespace.
 docs/gfx906-results/**/*.log -text -whitespace
@@ -13,3 +16,15 @@ tests/data/native_experts/** -text
 
 # the quant yardstick's text set: tokenized byte for byte (set.ids.json), never convert its line endings
 data/quant_quality/** -text
+
+# the license text is shipped and checked as LF text on every checkout
+LICENSE text eol=lf
+
+# container scripts run in Linux: always LF
+docker/*.sh text eol=lf
+Dockerfile text eol=lf
+docker/Dockerfile text eol=lf
+docker/compose/* text eol=lf
+
+# Apple tools (codesign, plutil) read these: LF only, wherever the repository is cloned
+*.plist text eol=lf
