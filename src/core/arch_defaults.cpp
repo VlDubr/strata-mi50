@@ -40,6 +40,11 @@ std::vector<std::pair<std::string, std::string>> arch_default_env(const char* gc
                                                          // merge walked all 512 chunks of its window (decode +1.0%)
             {"STRATA_GFX906_ATTN_QUERY_SWIZZLE", "1"},   // the INT8 attention chunks with the swizzled query and
             {"STRATA_GFX906_ATTN_REDUCE12", "1"},        // the 16-exchange score reduce (decode +0.7%, prompt +3%)
+            // 2026-10-21 (the same A/B, docs/GFX906.md):
+            {"STRATA_VERIFY_QDEDUP", "1"},               // the shared expert reads the routed experts' q8_1 image of the
+                                                         // FFN input instead of quantizing it again (decode +0.5%)
+            {"STRATA_GR_NORM_FAST", "1"},                // the split HC norm with its loads together and xn written once
+                                                         // (decode +1.3%)
         };
         return t;
     }
