@@ -1,0 +1,14 @@
+[{"name": "s1_perf2", "image": "strata-gfx906:0.2.0-perf2"},
+ {"name": "s1_sync", "image": "strata-gfx906:0.2.3-sync"},
+ {"name": "s1_perf2_b", "image": "strata-gfx906:0.2.0-perf2"},
+ {"name": "s1_sync_b", "image": "strata-gfx906:0.2.3-sync"}]
+
+[{"name": "s2_perf2", "image": "strata-gfx906:0.2.0-perf2"},
+ {"name": "s2_sync", "image": "strata-gfx906:0.2.3-sync"},
+ {"name": "s2_sync_ple0", "image": "strata-gfx906:0.2.3-sync", "env": {"STRATA_VERIFY_EARLY_PLE_FLAG": "0"}},
+ {"name": "s2_perf2_b", "image": "strata-gfx906:0.2.0-perf2"},
+ {"name": "s2_sync_b", "image": "strata-gfx906:0.2.3-sync"}]
+
+[{"name": "L2_perf2", "image": "strata-gfx906:0.2.0-perf2"}, {"name": "L2_sync", "image": "strata-gfx906:0.2.3-sync"}]
+[{"name": "L3_sync", "image": "strata-gfx906:0.2.3-sync"}, {"name": "L3_perf2", "image": "strata-gfx906:0.2.0-perf2"}, {"name": "L3_sync_b", "image": "strata-gfx906:0.2.3-sync"}, {"name": "L3_perf2_b", "image": "strata-gfx906:0.2.0-perf2"}]
+

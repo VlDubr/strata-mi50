@@ -1,0 +1,6 @@
+L2_perf2 startup 100 s | {"prompt_tokens": 115982, "prompt_ms": 80617.5, "output_tokens": 300, "decode_tok_s": 74.3, "drafts_accepted": 106, "drafts_offered": 126} wall 85s
+L2_sync startup 100 s | {"prompt_tokens": 115982, "prompt_ms": 85103.7, "output_tokens": 300, "decode_tok_s": 74.6, "drafts_accepted": 106, "drafts_offered": 126} wall 89s
+L3_sync startup 100 s | {"prompt_tokens": 115982, "prompt_ms": 81475.8, "output_tokens": 300, "decode_tok_s": 74.6, "drafts_accepted": 106, "drafts_offered": 126} wall 86s
+L3_perf2 startup 100 s | {"prompt_tokens": 115982, "prompt_ms": 85394.4, "output_tokens": 300, "decode_tok_s": 73.4, "drafts_accepted": 107, "drafts_offered": 130} wall 90s
+L3_sync_b startup 105 s | {"prompt_tokens": 115982, "prompt_ms": 86258.7, "output_tokens": 300, "decode_tok_s": 74.7, "drafts_accepted": 106, "drafts_offered": 126} wall 91s
+L3_perf2_b startup 105 s | {"prompt_tokens": 115982, "prompt_ms": 86632.0, "output_tokens": 300, "decode_tok_s": 74.4, "drafts_accepted": 106, "drafts_offered": 126} wall 91s
