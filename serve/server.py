@@ -3482,9 +3482,10 @@ def child_env(cfg: dict, *, offline: bool = False) -> dict:
         env["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in ordered_gpus(cfg))
     for k, v in (cfg.get("env") or {}).items():      # engine settings the config carries (AMD: the GEMM tuning table)
         env[str(k)] = str(v)
-    if hip_visible(cfg) and cfg.get("backend") == "hip":
+    if not gpu_all_off(cfg) and hip_visible(cfg) and cfg.get("backend") == "hip":
         # An explicit config owns the HIP mask. A stale parent ROCR/CUDA mask
         # would otherwise hide GPU1, or remap an ordered list a second time.
+        # Every card Off keeps the empty masks set above (a "hip_ordinal" must not bring one back).
         env.pop("ROCR_VISIBLE_DEVICES", None)
         env.pop("CUDA_VISIBLE_DEVICES", None)
         env["HIP_VISIBLE_DEVICES"] = ",".join(str(i) for i in hip_visible(cfg))

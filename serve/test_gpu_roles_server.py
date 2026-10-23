@@ -58,6 +58,13 @@ class Roles(unittest.TestCase):
         cpu = card_roles_lines({**cfg, "backend": "cpu"})
         self.assertIn("Performance is degraded on CPU only.", cpu[0])
 
+    def test_every_card_off_on_hip_keeps_the_empty_masks(self):
+        # fork: the explicit HIP mask (set after the config's env) must not bring a card back from a stale "hip_ordinal"
+        cfg = {"gpu_roles": {"0": "off", "1": "off"}, "gpu": [], "gpu_none": True, "hip_ordinal": 1,
+               "backend": "hip", "args": []}
+        env = child_env(cfg)
+        self.assertEqual((env.get("CUDA_VISIBLE_DEVICES"), env.get("HIP_VISIBLE_DEVICES")), ("", ""))
+
 
 if __name__ == "__main__":
     unittest.main()

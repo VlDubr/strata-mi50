@@ -282,10 +282,11 @@ bool sh_stream_on() {
 // the launch (the wait then passes at once); later launches keep the order that overlaps the read with layer 0 (reading
 // first costs about 1.4% decode on gfx1151).  Mode 0: never, 1: every launch, 2: the first launch of each graph.  Default:
 // 2 on HIP, 0 elsewhere (the CUDA path is unchanged).  STRATA_VERIFY_EARLY_PLE_FLAG=0 / 1 / 2 forces a mode.
+// The gfx906 compat build (STRATA_HIP_GFX906, no STRATA_USE_HIP) runs on the same HIP runtime, so it takes 2 too.
 int early_ple_flag_mode() {
     static const int mode = [] {
         if (const char* v = std::getenv("STRATA_VERIFY_EARLY_PLE_FLAG")) return std::atoi(v) < 0 ? 0 : std::min(2, std::atoi(v));
-#if defined(STRATA_USE_HIP)
+#if defined(STRATA_USE_HIP) || defined(STRATA_HIP_GFX906)
         return 2;
 #else
         return 0;
