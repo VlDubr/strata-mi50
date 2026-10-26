@@ -3150,7 +3150,10 @@ def parallel_args(cfg: dict, args: list[str]) -> list[str]:
         return []
     if n <= 1:
         return []
-    if n > PARALLEL_MAX and "--batch-mtp" not in args and os.environ.get("STRATA_BATCH_MTP", "0") in ("", "0"):
+    split = len(gpu_list(cfg)) > 1                  # several GPUs always run a layer split (engine_args)
+    # a layer split runs the slots in pipelined groups of up to PARALLEL_MAX each (docs/BATCHING.md, "More than 8 slots"),
+    # so its count is not capped here (fork: 12 slots as 4 groups of 3 on 4x MI50)
+    if n > PARALLEL_MAX and not split and "--batch-mtp" not in args and os.environ.get("STRATA_BATCH_MTP", "0") in ("", "0"):
         print(f'[strata] "parallel": {n} - the engine runs at most {PARALLEL_MAX} requests together; it will use '
               f"{PARALLEL_MAX}", flush=True)
     return ["--batch", str(n)]

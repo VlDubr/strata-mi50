@@ -4,6 +4,8 @@ A fake engine (a Python script speaking the engine's GEN / BGEN / BT / BDONE / B
 real StrataEngine and Service, so the server's side is tested without a GPU: requests up to N run at once, more
 wait for a slot, /metrics shows the slots, each request's history row is its own, and a conversation's next turn
 goes back to the slot that holds it."""
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -206,6 +208,14 @@ class ParallelArgs(unittest.TestCase):
         self.assertEqual(parallel_args({"parallel": 1}, []), [])
         self.assertEqual(parallel_args({}, []), [])
         self.assertEqual(parallel_args({"parallel": 2}, ["--batch", "3"]), [])       # the args' own value wins
+        # fork: a layer split takes more than 8 slots (pipelined groups of up to 8) without the "at most 8" note
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(parallel_args({"parallel": 12, "gpu": [0, 1, 2, 3]}, []), ["--batch", "12"])
+        self.assertNotIn("at most", out.getvalue())
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(parallel_args({"parallel": 12}, []), ["--batch", "12"])
+        self.assertIn("at most 8", out.getvalue())
         self.assertEqual(parallel_args({"parallel": "4"}, []), [])                   # said and ignored
         self.assertEqual(parallel_args({"parallel": True}, []), [])
         self.assertEqual(parallel_args({"parallel": 12}, []), ["--batch", "12"])     # the engine warns and caps
