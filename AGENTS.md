@@ -1,10 +1,11 @@
 # 尽量使用 ASD-STE100（Simplified Technical English）
 
-# strata-gfx906 — Development Rules
+# strata-mi50 — Development Rules
 
 This is a dedicated experimental MI50/MI60 gfx906 fork of `Niko1221/Strata`, synchronized through
 v0.1.40.1 / `82f46a8` (original port: v0.1.30 / `30ec18e`).
-The working branch is `gfx906`; `origin` is `webzone/strata-gfx906`. Absorb upstream updates with
+The working branch is `mi50` of `VlDubr/strata-mi50` (a fork of `Niko1221/Strata`); the gfx906 port and its history
+come from `webzone/strata-gfx906` (branch `gfx906`). Absorb upstream updates with
 reviewed merge commits, never rebasing published fork history or pushing to `upstream`.
 Preserving and optimizing real gfx906 support is the fork's purpose: upstream's wave32-only GPU
 support must not replace it. MI50 has archived hardware validation; MI60 still needs its own testing.

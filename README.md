@@ -1,4 +1,10 @@
-# Strata for AMD Instinct MI50 / MI60
+# strata-mi50: Strata for AMD Instinct MI50 / MI60
+
+**strata-mi50** (<https://github.com/VlDubr/strata-mi50>, branch `mi50`) is a fork of
+[Niko1221/Strata](https://github.com/Niko1221/Strata) for the gfx906 (wave64) cards. It carries the gfx906 port of
+[webzone/strata-gfx906](https://github.com/webzone/strata-gfx906) (branch `gfx906`, history kept) plus exact decode
+speed-ups, upstream merges through v0.2.6, and a tested 4x MI50 32 GB deployment (12 parallel requests at a 262144
+context); the measurements are in [docs/GFX906.md](docs/GFX906.md).
 
 **Source version: Strata v0.2.6 / `4b9e05a2`** (merged on 2026-10-26 on top of v0.2.3.1 and the gfx906 decode
 rounds of 2026-10-20 / 21; engine version string 0.1.51). Built and checked on a 4x MI50 32 GB server (greedy
@@ -148,8 +154,8 @@ This is not a general claim that every feature or model in upstream Strata is av
 ### Archived experimental installer (build engine, prepare model, do not start yet)
 
 ```bash
-git clone --branch gfx906 https://github.com/webzone/strata-gfx906.git
-cd strata-gfx906
+git clone --branch mi50 https://github.com/VlDubr/strata-mi50.git
+cd strata-mi50
 
 export STRATA_API_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 
