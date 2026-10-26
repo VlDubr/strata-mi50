@@ -1,0 +1,8 @@
+[{"name": "P2a_par10_128k_trim", "top": {"parallel": 10, "layer_split": "12,24,36"},
+  "args": {"--trim-stage-weights": ""}},
+ {"name": "P2b_par10_256k_kvres_trim", "top": {"parallel": 10, "layer_split": "12,24,36"},
+  "args": {"--max-context": "262144", "--kv-resident": "32768", "--trim-stage-weights": "", "--resident-budget-gib": "24"}},
+ {"name": "P2c_par8_256k_kvres_trim", "top": {"parallel": 8, "layer_split": "12,24,36"},
+  "args": {"--max-context": "262144", "--kv-resident": "32768", "--trim-stage-weights": "", "--resident-budget-gib": "24"}},
+ {"name": "P2d_par12_256k_kvres_trim", "top": {"parallel": 12, "layer_split": "12,24,36"},
+  "args": {"--max-context": "262144", "--kv-resident": "32768", "--trim-stage-weights": "", "--resident-budget-gib": "24"}}]

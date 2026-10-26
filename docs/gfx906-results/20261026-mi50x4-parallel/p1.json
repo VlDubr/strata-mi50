@@ -1,0 +1,8 @@
+[{"name": "P0_solo"},
+ {"name": "P1_par10_128k", "top": {"parallel": 10}},
+ {"name": "P2_par10_256k_stream_trim", "top": {"parallel": 10, "layer_split": "12,24,36"},
+  "args": {"--max-context": "262144", "--kv-streaming": "on", "--trim-stage-weights": ""}},
+ {"name": "P3_par12_256k_stream_trim", "top": {"parallel": 12, "layer_split": "12,24,36"},
+  "args": {"--max-context": "262144", "--kv-streaming": "on", "--trim-stage-weights": ""}},
+ {"name": "P4_par8_256k_stream_trim", "top": {"parallel": 8, "layer_split": "12,24,36"},
+  "args": {"--max-context": "262144", "--kv-streaming": "on", "--trim-stage-weights": ""}}]

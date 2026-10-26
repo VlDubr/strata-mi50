@@ -1,0 +1,117 @@
+===== P3b_par12_256k_switches
+startup 150 s
+  | [strata] 2026-10-26 11:16:05 engine started: /opt/strata/engine/strata --serve --pack /data/packs/unsloth-ud-q5_k_xl --native /data/models/unsloth-UD-Q5_K_XL/Qwen3.8-Flash-Next-UD-Q5_K_XL-00001-of-00006.gguf --expert-pro
+  | strata generate: memory guard: limit 91.9 GiB (source: meminfo), current 9.0 GiB, reclaimable cache credited 0.0 GiB; available 82.9 GiB (MemAvailable 82.9 GiB), floor 2560 MiB
+  | strata generate: native pack: /data/packs/unsloth-ud-q5_k_xl experts (largest blob 4.43 MB), token embedding Q8_0 in mapped host memory (644 MiB, 0.8 s)
+  | strata generate: 463 MiB of weights loaded from /data/packs/unsloth-ud-q5_k_xl in 0.1 s (843 canonical tensors skipped: served natively)
+  | strata generate: --pipeline-windows 2 is off: not with --batch slots
+  | strata generate: profile /opt/strata/data/expert-profile.bin: 24576 ranked pairs, built for 24576 slots
+  | strata generate: KV streaming: 32768 of 262144 cells per QSA layer in VRAM, the K/V in 0.77 GiB of pinned RAM
+  | strata generate: PLE on, table 320001536 rows of /data/models/unsloth-UD-Q5_K_XL/Qwen3.8-Flash-Next-UD-Q5_K_XL-00003-of-00006.gguf
+  | strata generate: --batch-groups auto: 4 groups of 3 slots
+  | strata generate: --batch: 12 slot sessions on CUDA0 (0.29 GiB each); 26.49 GiB free
+  | strata generate: --batch: 12 slot sessions on CUDA1 (0.29 GiB each); 26.60 GiB free
+  | strata generate: --batch: 12 slot sessions on CUDA2 (0.29 GiB each); 26.60 GiB free
+  | strata generate: --batch: 12 slot sessions on CUDA3 (0.29 GiB each); 25.97 GiB free
+  | strata generate: --batch 12: the slot sessions take 3.49 GiB of VRAM on CUDA0 that the expert cache would otherwise hold
+  | strata generate: the file tier reads unbuffered (40.9 GiB available, 24.0 GiB of it still to be taken by the RAM copy, 67.6 GiB of experts read from the files: the file cache cannot keep the ones that come back)
+  | strata generate: expert cache auto: 26.49 GiB free, 700 MiB reserved (+0 MiB for the draft head) -> 6144 slots
+  | strata generate: expert cache 6144 slots, 23.06 GiB of VRAM; policy is
+  | strata generate: pre-filled 6144 of 6144 slots from the profile in 20.5 s (1210 MB/s); slot 0 verified
+  | strata generate: layer split, CUDA1: 26.60 GiB free of 31.98, room for experts 25.82 GiB
+  | strata generate: layer split: CUDA1 runs layers 12-23, expert cache 6144 slots (22.85 GiB), 6144 of its 6144 profiled pairs; slot 0 verified
+  | strata generate: layer split, CUDA2: 26.60 GiB free of 31.98, room for experts 25.82 GiB
+  | strata generate: layer split: CUDA2 runs layers 24-35, expert cache 6144 slots (22.85 GiB), 6144 of its 6144 profiled pairs; slot 0 verified
+  | strata generate: layer split, CUDA3: 25.15 GiB free of 31.98, room for experts 24.37 GiB
+  | strata generate: layer split: CUDA3 runs layers 36-47, expert cache 6144 slots (22.85 GiB), 6144 of its 6144 profiled pairs; slot 0 verified
+  | strata generate: R4 hit path ON - resident experts are computed on the GPU
+  | strata generate: token graph hit path: 24576 resident experts, decided on the device
+  | strata serve: layer split: 100% of the experts resident, the prompt path's streamed ring 96 slots
+  | FileExpertSource: mapped pinned cache complement ready: resident 3.94 GiB, pinned 3.94 GiB in 5 s; page-locked and mapped
+  | FileExpertSource: the split stages lend 1055 slots to the prompt path: 1055 keep their experts in RAM too (3.94 GiB)
+  | strata generate: resident RAM mode: 3.94 GiB of experts in RAM (page-locked), 6144 in the GPU cache; adaptive swaps exchange them with the GPU cache (no file reads)
+  | strata generate: the file tier reads unbuffered (re-checked with the RAM copy built (3.94 GiB): 35.5 GiB available, 0.0 GiB of it still to be taken by the RAM copy, 87.7 GiB of experts read from the files: the file cache
+  | strata serve: the prompt path borrows 526 CUDA0 cache slots (1.97 GiB)
+  | strata serve:   CUDA3 prompt path borrows 529 of its 6144 slots (1.97 GiB)
+  | strata serve: lend sizing: the prompt path borrows 1055 slots (ring 96 slots at chunk 3072), 1055 of them keep their experts in RAM too
+  | strata hc: CUDA1: the hyper-connection read runs as staged (the norm per token and stream, the down projection's activations staged ahead by cp.async); checked bit for bit against the plain read on this card (STRATA_HC_S
+  | strata verify: window up to 8 tokens, 114.6 MiB of device buffers (100% VRAM resident: zero-doorbell graph)
+  | strata hc: CUDA2: the hyper-connection read runs as staged (the norm per token and stream, the down projection's activations staged ahead by cp.async); checked bit for bit against the plain read on this card (STRATA_HC_S
+  | strata verify: window up to 8 tokens, 114.6 MiB of device buffers (100% VRAM resident: zero-doorbell graph)
+  | strata hc: CUDA3: the hyper-connection read runs as staged (the norm per token and stream, the down projection's activations staged ahead by cp.async); checked bit for bit against the plain read on this card (STRATA_HC_S
+  | strata verify: window up to 8 tokens, 114.6 MiB of device buffers (100% VRAM resident: zero-doorbell graph)
+  | strata hc: CUDA0: the hyper-connection read runs as staged (the norm per token and stream, the down projection's activations staged ahead by cp.async); checked bit for bit against the plain read on this card (STRATA_HC_S
+  | strata verify: window up to 8 tokens, 114.6 MiB of device buffers (100% VRAM resident: zero-doorbell graph)
+  | strata verify: batch windows of up to 12 sequences (layers [0, 12)), one-row windows keep their rows
+  | strata verify: batch windows of up to 12 sequences (layers [12, 24)), one-row windows keep their rows
+  | strata verify: batch windows of up to 12 sequences (layers [24, 36)), one-row windows keep their rows
+  | strata verify: batch windows of up to 12 sequences (layers [36, 48)), one-row windows keep their rows
+{"n": 1, "round": 0, "ok": 1, "errors": [], "aggregate_tok_s": 54.1, "wall_s": 5.5, "per_req_dec_min_med_max": [63.4, 63.4, 63.4], "ttft_min_med_max": [0.83, 0.83, 0.83], "concurrency": {"serving": 12, "requested": 12}}
+{"n": 4, "round": 0, "ok": 4, "errors": [], "aggregate_tok_s": 44.2, "wall_s": 7.8, "per_req_dec_min_med_max": [7.7, 43.4, 49.9], "ttft_min_med_max": [0.87, 2.16, 3.03], "concurrency": {"serving": 12, "requested": 12}}
+{"n": 10, "round": 0, "ok": 10, "errors": [], "aggregate_tok_s": 57.5, "wall_s": 12.9, "per_req_dec_min_med_max": [2.3, 6.8, 36.0], "ttft_min_med_max": [0.2, 3.83, 7.05], "concurrency": {"serving": 12, "requested": 12}}
+long 380000 {"prompt_tokens": 115982, "prompt_ms": 84652.7, "output_tokens": 300, "decode_tok_s": 56.2, "drafts_accepted": 112, "drafts_offered": 130} wall 90s
+               total        used        free      shared  buff/cache   available
+Mem:              91          62          17          49          61          29
+GPU[0]		: GPU Memory Allocated (VRAM%): 94
+GPU[1]		: GPU Memory Allocated (VRAM%): 96
+GPU[2]		: GPU Memory Allocated (VRAM%): 96
+GPU[3]		: GPU Memory Allocated (VRAM%): 90
+===== P3d_par12_256k_budget40
+startup 150 s
+  | [strata] 2026-10-26 11:21:01 engine started: /opt/strata/engine/strata --serve --pack /data/packs/unsloth-ud-q5_k_xl --native /data/models/unsloth-UD-Q5_K_XL/Qwen3.8-Flash-Next-UD-Q5_K_XL-00001-of-00006.gguf --expert-pro
+  | strata generate: memory guard: limit 91.9 GiB (source: meminfo), current 9.0 GiB, reclaimable cache credited 0.0 GiB; available 82.9 GiB (MemAvailable 82.9 GiB), floor 2560 MiB
+  | strata generate: native pack: /data/packs/unsloth-ud-q5_k_xl experts (largest blob 4.43 MB), token embedding Q8_0 in mapped host memory (644 MiB, 0.8 s)
+  | strata generate: 463 MiB of weights loaded from /data/packs/unsloth-ud-q5_k_xl in 0.1 s (843 canonical tensors skipped: served natively)
+  | strata generate: --pipeline-windows 2 is off: not with --batch slots
+  | strata generate: profile /opt/strata/data/expert-profile.bin: 24576 ranked pairs, built for 24576 slots
+  | strata generate: KV streaming: 32768 of 262144 cells per QSA layer in VRAM, the K/V in 0.77 GiB of pinned RAM
+  | strata generate: PLE on, table 320001536 rows of /data/models/unsloth-UD-Q5_K_XL/Qwen3.8-Flash-Next-UD-Q5_K_XL-00003-of-00006.gguf
+  | strata generate: --batch-groups auto: 4 groups of 3 slots
+  | strata generate: --batch: 12 slot sessions on CUDA0 (0.29 GiB each); 26.49 GiB free
+  | strata generate: --batch: 12 slot sessions on CUDA1 (0.29 GiB each); 26.60 GiB free
+  | strata generate: --batch: 12 slot sessions on CUDA2 (0.29 GiB each); 26.60 GiB free
+  | strata generate: --batch: 12 slot sessions on CUDA3 (0.29 GiB each); 25.97 GiB free
+  | strata generate: --batch 12: the slot sessions take 3.49 GiB of VRAM on CUDA0 that the expert cache would otherwise hold
+  | strata generate: the file tier reads unbuffered (40.8 GiB available, 40.0 GiB of it still to be taken by the RAM copy, 51.6 GiB of experts read from the files: the file cache cannot keep the ones that come back)
+  | strata generate: expert cache auto: 26.49 GiB free, 700 MiB reserved (+0 MiB for the draft head) -> 6144 slots
+  | strata generate: expert cache 6144 slots, 23.06 GiB of VRAM; policy is
+  | strata generate: pre-filled 6144 of 6144 slots from the profile in 20.6 s (1200 MB/s); slot 0 verified
+  | strata generate: layer split, CUDA1: 26.60 GiB free of 31.98, room for experts 25.82 GiB
+  | strata generate: layer split: CUDA1 runs layers 12-23, expert cache 6144 slots (22.85 GiB), 6144 of its 6144 profiled pairs; slot 0 verified
+  | strata generate: layer split, CUDA2: 26.60 GiB free of 31.98, room for experts 25.82 GiB
+  | strata generate: layer split: CUDA2 runs layers 24-35, expert cache 6144 slots (22.85 GiB), 6144 of its 6144 profiled pairs; slot 0 verified
+  | strata generate: layer split, CUDA3: 25.15 GiB free of 31.98, room for experts 24.37 GiB
+  | strata generate: layer split: CUDA3 runs layers 36-47, expert cache 6144 slots (22.85 GiB), 6144 of its 6144 profiled pairs; slot 0 verified
+  | strata generate: R4 hit path ON - resident experts are computed on the GPU
+  | strata generate: token graph hit path: 24576 resident experts, decided on the device
+  | strata serve: layer split: 100% of the experts resident, the prompt path's streamed ring 96 slots
+  | FileExpertSource: --resident-budget-gib 40.00 exceeds available RAM (39.90 GiB minus 4 GiB headroom and a 0.25 GiB margin): 35.65 GiB
+  | FileExpertSource: mapped pinned cache complement ready: resident 3.94 GiB, pinned 3.94 GiB in 5 s; page-locked and mapped
+  | FileExpertSource: the split stages lend 1055 slots to the prompt path: 1055 keep their experts in RAM too (3.94 GiB)
+  | strata generate: resident RAM mode: 3.94 GiB of experts in RAM (page-locked), 6144 in the GPU cache; adaptive swaps exchange them with the GPU cache (no file reads)
+  | strata generate: the file tier reads unbuffered (re-checked with the RAM copy built (3.94 GiB): 35.5 GiB available, 0.0 GiB of it still to be taken by the RAM copy, 87.7 GiB of experts read from the files: the file cache
+  | strata serve: the prompt path borrows 526 CUDA0 cache slots (1.97 GiB)
+  | strata serve:   CUDA3 prompt path borrows 529 of its 6144 slots (1.97 GiB)
+  | strata serve: lend sizing: the prompt path borrows 1055 slots (ring 96 slots at chunk 3072), 1055 of them keep their experts in RAM too
+  | strata hc: CUDA1: the hyper-connection read runs as staged (the norm per token and stream, the down projection's activations staged ahead by cp.async); checked bit for bit against the plain read on this card (STRATA_HC_S
+  | strata verify: window up to 8 tokens, 114.6 MiB of device buffers (100% VRAM resident: zero-doorbell graph)
+  | strata hc: CUDA2: the hyper-connection read runs as staged (the norm per token and stream, the down projection's activations staged ahead by cp.async); checked bit for bit against the plain read on this card (STRATA_HC_S
+  | strata verify: window up to 8 tokens, 114.6 MiB of device buffers (100% VRAM resident: zero-doorbell graph)
+  | strata hc: CUDA3: the hyper-connection read runs as staged (the norm per token and stream, the down projection's activations staged ahead by cp.async); checked bit for bit against the plain read on this card (STRATA_HC_S
+  | strata verify: window up to 8 tokens, 114.6 MiB of device buffers (100% VRAM resident: zero-doorbell graph)
+  | strata hc: CUDA0: the hyper-connection read runs as staged (the norm per token and stream, the down projection's activations staged ahead by cp.async); checked bit for bit against the plain read on this card (STRATA_HC_S
+  | strata verify: window up to 8 tokens, 114.6 MiB of device buffers (100% VRAM resident: zero-doorbell graph)
+  | strata verify: batch windows of up to 12 sequences (layers [0, 12))
+  | strata verify: batch windows of up to 12 sequences (layers [12, 24))
+  | strata verify: batch windows of up to 12 sequences (layers [24, 36))
+  | strata verify: batch windows of up to 12 sequences (layers [36, 48))
+{"n": 1, "round": 0, "ok": 1, "errors": [], "aggregate_tok_s": 53.4, "wall_s": 5.6, "per_req_dec_min_med_max": [63.4, 63.4, 63.4], "ttft_min_med_max": [0.91, 0.91, 0.91], "concurrency": {"serving": 12, "requested": 12}}
+{"n": 4, "round": 0, "ok": 4, "errors": [], "aggregate_tok_s": 120.2, "wall_s": 10.0, "per_req_dec_min_med_max": [32.9, 38.3, 43.8], "ttft_min_med_max": [0.84, 2.16, 3.15], "concurrency": {"serving": 12, "requested": 12}}
+{"n": 10, "round": 0, "ok": 10, "errors": [], "aggregate_tok_s": 160.4, "wall_s": 18.7, "per_req_dec_min_med_max": [16.4, 20.2, 26.5], "ttft_min_med_max": [0.28, 3.87, 7.42], "concurrency": {"serving": 12, "requested": 12}}
+long 380000 {"prompt_tokens": 115982, "prompt_ms": 89509.4, "output_tokens": 300, "decode_tok_s": 56.3, "drafts_accepted": 112, "drafts_offered": 130} wall 95s
+               total        used        free      shared  buff/cache   available
+Mem:              91          63          17          49          61          28
+GPU[0]		: GPU Memory Allocated (VRAM%): 94
+GPU[1]		: GPU Memory Allocated (VRAM%): 96
+GPU[2]		: GPU Memory Allocated (VRAM%): 96
+GPU[3]		: GPU Memory Allocated (VRAM%): 90

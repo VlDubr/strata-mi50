@@ -1,0 +1,38 @@
+[
+ {
+  "name": "P3b_par12_256k_switches",
+  "top": {
+   "parallel": 12,
+   "layer_split": "12,24,36"
+  },
+  "args": {
+   "--max-context": "262144",
+   "--kv-resident": "32768",
+   "--trim-stage-weights": "",
+   "--resident-budget-gib": "24"
+  },
+  "env": {
+   "STRATA_BATCH_GDN_GROUPS": "1",
+   "STRATA_QSA_SLOTS": "1",
+   "STRATA_SLOT_COPY_DIRECT": "1",
+   "STRATA_SLOT_COPY_BATCHSYNC": "1",
+   "STRATA_ADMIT_MERGE_FIRST": "1",
+   "STRATA_BATCH_SELF_COMMIT": "1",
+   "STRATA_SLOT_CKPT_MOVE": "1",
+   "STRATA_CKPT_POOL": "1"
+  }
+ },
+ {
+  "name": "P3d_par12_256k_budget40",
+  "top": {
+   "parallel": 12,
+   "layer_split": "12,24,36"
+  },
+  "args": {
+   "--max-context": "262144",
+   "--kv-resident": "32768",
+   "--trim-stage-weights": "",
+   "--resident-budget-gib": "40"
+  }
+ }
+]

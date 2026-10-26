@@ -1,0 +1,14 @@
+[Unit]
+Description=Pin AMD GPU DPM performance level to high (Strata decode latency on MI50)
+After=systemd-modules-load.service systemd-udev-settle.service
+Before=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=180
+ExecStart=/usr/local/sbin/amdgpu-perf-high.sh high
+ExecStop=/usr/local/sbin/amdgpu-perf-high.sh auto
+
+[Install]
+WantedBy=multi-user.target

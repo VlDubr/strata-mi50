@@ -1,0 +1,10 @@
+== eqcheck 8
+{"n": 8, "same": 8, "solo": ["04e7466f24", "cfce48480e", "8e262d5d9e", "0693c121df", "ecac89cf73", "24f7a7a3f8", "35a3127829", "7febcb842e"], "together": ["04e7466f24", "cfce48480e", "8e262d5d9e", "0693c121df", "ecac89cf73", "24f7a7a3f8", "35a3127829", "7febcb842e"]}
+== det
+{"math": "770fcb9797eb", "code": "82d170e4650c", "ru": "df32f8126e29", "long": "8834f0cc4e5c"}
+== long 820000
+{"prompt_tokens": 249189, "prompt_ms": 222904.3, "output_tokens": 300, "decode_tok_s": 50.6, "drafts_accepted": 107, "drafts_offered": 129} wall 229s
+== mem
+               total        used        free      shared  buff/cache   available
+Mem:              91          63          16          49          61          28
+DONE
