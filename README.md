@@ -19,14 +19,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Niko1221/Strata/releases/tag/v0.2.6"><img src="https://img.shields.io/badge/upstream-Strata_v0.2.6-0ab887" alt="Upstream Strata v0.2.6"></a>
+  <a href="https://github.com/Niko1221/Strata/releases/tag/v0.2.10"><img src="https://img.shields.io/badge/upstream-Strata_v0.2.10-0ab887" alt="Upstream Strata v0.2.10"></a>
   <img src="https://img.shields.io/badge/GPU-MI50_%2F_MI60_(gfx906)-ED1C24?logo=amd&logoColor=white" alt="AMD Instinct MI50 / MI60, gfx906">
   <img src="https://img.shields.io/badge/ROCm-10.0-ED1C24" alt="ROCm 10.0">
   <img src="https://img.shields.io/badge/context-262K_tokens-6f42c1" alt="262K-token context">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
 
-**Source version: Strata v0.2.6 / `4b9e05a2`** · engine 0.1.51 · llama.cpp / ggml pin `3cf03257` ·
+**Source version: Strata v0.2.10 / `ffa80d73`** · engine 0.1.56 · llama.cpp / ggml pin `3cf03257` ·
 branch [`mi50`](https://github.com/VlDubr/strata-mi50/tree/mi50)
 
 [Strata](https://github.com/Niko1221/Strata) runs large mixture-of-experts models on consumer and workstation GPUs.
@@ -48,7 +48,7 @@ architecture on ROCm 10, adds MI50-specific decode speed-ups that keep the outpu
 - **12 requests at once, full context.** On 4x MI50 32 GB: 12 batch slots in 4 pipelined groups, each conversation up
   to 262,144 tokens, all 24,576 experts in VRAM.
 - **Batch output equals solo output.** Eight greedy prompts give the same bytes one at a time and all at once.
-- **Current with upstream.** Upstream releases are merged through v0.2.6. Every conflict, check and measurement is
+- **Current with upstream.** Upstream releases are merged through v0.2.10. Every conflict, check and measurement is
   recorded in [docs/GFX906.md](docs/GFX906.md).
 - **Ready to deploy.** Dockerfile, launcher and a GPU clock service in [deploy/mi50/](deploy/mi50/).
 
@@ -322,8 +322,8 @@ flowchart LR
 - **`main`**: a mirror of upstream Strata.
 - **Upstream merges** are reviewed merge commits, never a rebase. In a conflict the fork's gfx906 behaviour wins and is
   rebuilt on upstream's new structure; each conflict and the post-merge checks are recorded in
-  [docs/GFX906.md](docs/GFX906.md). Merged so far: v0.1.30 (the original port) through v0.2.0-beta+, v0.2.3.1 and
-  v0.2.6.
+  [docs/GFX906.md](docs/GFX906.md). Merged so far: v0.1.30 (the original port) through v0.2.0-beta+, v0.2.3.1,
+  v0.2.6 and v0.2.10.
 
 ### Status and limits
 
