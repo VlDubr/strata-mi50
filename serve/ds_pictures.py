@@ -13,6 +13,7 @@ Decoding needs Pillow (the server asks for it by name when it is missing).  Noth
 from __future__ import annotations
 
 import io
+import math
 import os
 import struct
 import tempfile
@@ -82,6 +83,35 @@ def fit_size(width: int, height: int, max_tokens: int = MAX_TOKENS, min_pixels: 
     return w, h
 
 
+def glm5_canvas(width: int, height: int, factor: int, min_px: int, max_px: int) -> tuple[int, int, int, int]:
+    """GLM-5.3-Flash's picture size (llama.cpp mtmd_image_preprocessor_glm5v): (canvas w, h, content w, h).  The canvas is the picture's
+    size rounded up to `factor`, fitted to the pixel budget; the content sits top-left, scaled only to meet the budget."""
+    if width <= 0 or height <= 0:
+        raise ValueError("the picture has no size")
+
+    def align(v: int) -> int:
+        return (v + factor - 1) // factor * factor
+
+    ch, cw = align(height), align(width)
+    if ch * cw < min_px:
+        scale = (min_px / (height * width)) ** 0.5
+        ch, cw = align(max(1, math.ceil(height * scale))), align(max(1, math.ceil(width * scale)))
+    if ch * cw > max_px:
+        lo, hi, bh, bw = 1, height, factor, factor
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            ah, aw = align(mid), align(max(1, width * mid // height))
+            if ah * aw <= max_px:
+                bh, bw, lo = ah, aw, mid + 1
+            else:
+                hi = mid - 1
+        ch, cw = bh, bw
+    scale = min(ch / height, cw / width)
+    if height * width >= min_px:
+        scale = min(1.0, scale)
+    return cw, ch, max(1, min(cw, math.floor(width * scale))), max(1, min(ch, math.floor(height * scale)))
+
+
 class DsPictures:
     """What the Service holds as `vision` for a DeepSeek-V4.1 engine that reads pictures itself.  It has the few members the
     Service asks of a picture encoder (alive, elastic, restart, unload, dir) and does the DeepSeek-specific work in build()."""
@@ -110,6 +140,8 @@ class DsPictures:
         try:
             if int(k.get("vision.num_hidden_layers", "0")) <= 0 or "image_token_id" not in k:
                 return None
+            if k.get("family") == "glm5-next":
+                cls = Glm5Pictures
             return cls(int(k["image_token_id"]), int(k.get("vision.max_image_tokens", MAX_TOKENS)),
                        int(float(k.get("vision.min_pixels", MIN_PIXELS))), tmp_dir,
                        int(k.get("vision.patch_size", PATCH)), int(k.get("vision.downsample_ratio", MERGE)))
@@ -150,6 +182,10 @@ class DsPictures:
             return bg
         return im if im.mode == "RGB" else im.convert("RGB")
 
+    def span(self, width: int, height: int) -> int:
+        """The image tokens a picture of this size takes."""
+        return span_length(width, height, self.patch, self.merge)
+
     def prepare(self, data: bytes) -> tuple[int, int, bytes]:
         """-> (width, height, RGB bytes) of the picture at the size the tower takes."""
         im = self.decode(data)
@@ -180,7 +216,7 @@ class DsPictures:
             w, h, rgb = self.prepare(data)
             out += ids[last:pos]
             entries.append((len(out), w, h, rgb))
-            out += [self.image_token] * span_length(w, h, self.patch, self.merge)
+            out += [self.image_token] * self.span(w, h)
             last = pos + 1
         out += ids[last:]
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -197,3 +233,24 @@ class DsPictures:
                 pass
             raise
         return out, path
+
+
+class Glm5Pictures(DsPictures):
+    """GLM-5.3-Flash: the engine's tower too, a row a 2 x 2 block of patches and no markers of its own (the template writes them)."""
+
+    def span(self, width: int, height: int) -> int:
+        cell = self.patch * self.merge
+        return (width // cell) * (height // cell)
+
+    def prepare(self, data: bytes) -> tuple[int, int, bytes]:
+        from PIL import Image
+        im = self.decode(data)
+        cell = self.patch * self.merge
+        cw, ch, w, h = glm5_canvas(im.width, im.height, cell, self.min_pixels, self.max_tokens * cell * cell)
+        if (w, h) != im.size:
+            im = im.resize((w, h), Image.BICUBIC)
+        if (w, h) != (cw, ch):
+            canvas = Image.new("RGB", (cw, ch), (0, 0, 0))
+            canvas.paste(im, (0, 0))
+            im = canvas
+        return cw, ch, im.tobytes()

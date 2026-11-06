@@ -25,6 +25,7 @@
 #include "ds4_gguf_cpu.hpp"
 #include "ds4_kernels.cuh"
 #include "glm5_kernels.cuh"
+#include "glm5_vision.cuh"
 #include "ds4_os.hpp"
 #include "ds4_pcie.cuh"
 #include "ds4_pcie.hpp"
@@ -602,7 +603,10 @@ struct Geo {
             kda_heads = (int) p.num("kda_heads", 0), kda_hd = (int) p.num("kda_head_dim", 0);
             kpool = (int) p.num("index_kpool", 0);
             kda_lb = (float) p.num("kda_gate_lower_bound", 0.0), ln_eps = (float) p.num("layer_norm_eps", 1e-6);
-            ratios.assign((size_t) nl, 0);   // (no compressed KV: every layer is its own kind, see Layer)
+            // the multi-token head (block 45): one block of the model's own kind, one draft a round unless --dspark-block says more
+            n_mtp = p.num("nextn_layers", 0) > 0 ? 1 : 0;
+            d_block = 1, d_n_exp = n_exp, d_k = k_exp;
+            ratios.assign((size_t) nl + n_mtp, 0);   // (no compressed KV: every layer is its own kind, see Layer)
             win = 1;                         // (no window ring either; one row keeps the scratch sizes non-zero)
             o_groups = 1;
             o_lora = 1;
@@ -658,7 +662,13 @@ struct Dev {
     float *g_xq = nullptr, *g_xk = nullptr, *g_xv = nullptr, *g_graw = nullptr, *g_g2 = nullptr, *g_fa = nullptr, *g_ga = nullptr,
           *g_beta = nullptr, *g_ko = nullptr, *g_q = nullptr, *g_ob = nullptr, *g_ig = nullptr, *g_d1 = nullptr, *g_d3 = nullptr,
           *g_dh = nullptr;
-    uint8_t* g_emb = nullptr;   // (the first layer's device) the Q8_0 embedding table
+    uint8_t* g_emb = nullptr;   // (the first layer's device, and the head's for block 45) the Q8_0 embedding table
+    // (the head's device, with block 45) a window's rows: the token rows, the block's input, u; the last z; a window's final hidden
+    // rows, a chunk's (row 0: the one before it); the pick and its probability
+    float *g_me = nullptr, *g_mx = nullptr, *g_mu = nullptr, *g_mz = nullptr, *g_mw = nullptr, *g_mh = nullptr, *g_mc = nullptr;
+    int* g_mt = nullptr;
+    uint16_t* g_img = nullptr;   // (the first layer's device) a window's picture rows, and where they go
+    int* g_imgat = nullptr;
     // a prompt's chunk (kGlmChunk rows): the streams, the FFN input, its sum, the FFN's post and comb, the picks
     float *g_H = nullptr, *g_H2 = nullptr, *g_cx = nullptr, *g_cm = nullptr, *g_cpost = nullptr, *g_ccomb = nullptr, *g_cw = nullptr,
           *g_cpu = nullptr;
@@ -896,8 +906,10 @@ struct Layer {
     float *k_cq = nullptr, *k_ck = nullptr, *k_cv = nullptr, *k_dt = nullptr, *k_a = nullptr, *k_norm = nullptr,
           *ik_bias = nullptr, *i_ape = nullptr, *i_proj = nullptr;
     uint8_t *m_kb = nullptr, *m_vb = nullptr;
-    float *k_state = nullptr, *k_conv = nullptr;
+    float *k_state = nullptr, *k_conv = nullptr, *k_bak = nullptr, *k_cbak = nullptr;
     uint16_t *c_lat = nullptr, *i_kg = nullptr, *i_pool = nullptr;
+    x3::Mat m_eh;                                                     // block 45's input projection and norms
+    float *m_en = nullptr, *m_hn = nullptr, *m_sn = nullptr;
     int src = -1;      // the kv source whose compressed KV this layer reads (index into Impl::srcs)
     int ik_src = -1;   // the kv source whose index keys its indexer reads
     int eg = -1;       // engram layer index, or -1
@@ -1204,6 +1216,10 @@ struct Model::Impl {
     } pm;
     static constexpr int kWarmRows = 32;     // (warm_after: the run's last rows whose picks it reads ahead)
     static constexpr int kGlmChunk = 256;   // GLM-5.3: a prompt's rows through a layer at once (glm5_chunk)
+    static constexpr int kGlmDrafts = 3;    // ... and the drafts block 45 makes a round at most
+    static constexpr int kMtpRing = 64;     // ... the final hidden rows a conversation keeps for block 45, by position
+    float* mtp_ring = nullptr;              // (the head's device, the bound conversation's)
+    int64_t mtp_fill = 0;                   // block 45's caches hold the positions before this one
     std::mutex g5_lane;   // (the CPU lane's buffers are one: a device's experts at a time)
     static constexpr int kPickMax = 2048;   // (from here on the flow: windows' work grows with every 16 tokens)
     static constexpr double kPickRes = 0.9;  // (this share of the CPU-lane experts in RAM: windows if predicted faster)
@@ -1335,6 +1351,8 @@ struct Model::Impl {
         std::vector<std::vector<uint8_t*>> ckv, ik;   // [source][device]
         std::vector<float*> k_state, k_conv;          // GLM-5.3 [layer member]: the KDA state, the MLA caches by position
         std::vector<uint16_t*> c_lat, i_kg, i_pool;
+        float* mtp_ring = nullptr;                    // (see Impl::mtp_ring, mtp_fill)
+        int64_t mtp_fill = 0;
     };
     std::vector<SeqState> sqs;   // empty: one conversation (Options::seqs 1)
     int sq_bound = 0;
@@ -2704,8 +2722,7 @@ struct Model::Impl {
             o.tp = 1;
             o.threads = false;
             o.prefill_chunk = 0;
-            o.dspark = false;
-            o.vision = false;
+            o.dspark_auto = false;
         }
         if (g.dim == 0 || g.nl == 0 || (int) g.ratios.size() < g.nl) {
             err = o.pack + "/ds4.txt: incomplete geometry";
@@ -2813,7 +2830,7 @@ struct Model::Impl {
             for (const auto& kt : pk.t) {
                 const std::string& n = kt.first;
                 if (n.find(".engram.embed.") != std::string::npos || n.rfind("vision.", 0) == 0 || n == "embed.weight" ||
-                    (!o.dspark && n.rfind("mtp.", 0) == 0))
+                    (!o.dspark && (n.rfind("mtp.", 0) == 0 || n.rfind("nextn.", 0) == 0)))
                     continue;
                 (n.find(".ffn.experts.") != std::string::npos ? exp_b : other_b) += (double) kt.second.bytes;
             }
@@ -2901,6 +2918,7 @@ struct Model::Impl {
             }
         }
         if (!o.dspark) g.n_mtp = 0;
+        if (g.glm5 && o.dspark_block > 0) g.d_block = std::min(o.dspark_block, kGlmDrafts);
         if (o.dspark_block > 0 && std::getenv("DS4_DSPARK_MAX") == nullptr) max_drafts = o.dspark_block;   // (--dspark-block N: at most N drafts a round)
         L.resize((size_t) (g.nl + g.n_mtp));
         int last_src = -1;
@@ -2909,7 +2927,7 @@ struct Model::Impl {
             Layer& l = L[(size_t) il];
             l.il = il;
             l.mtp = il >= g.nl;
-            l.name = l.mtp ? "mtp." + std::to_string(il - g.nl) + "." : "layers." + std::to_string(il) + ".";
+            l.name = l.mtp ? (g.glm5 ? std::string("nextn.") : "mtp." + std::to_string(il - g.nl) + ".") : "layers." + std::to_string(il) + ".";
             l.n_exp = l.mtp ? g.d_n_exp : g.n_exp;
             if (l.mtp && l.n_exp > g.n_exp) {   // the profile keeps one row width (g.n_exp) for every block: a drafter with more experts than the model would write past it
                 err = l.name + ": the drafter has " + std::to_string(l.n_exp) + " experts and the model " + std::to_string(g.n_exp) + ": not covered";
@@ -2917,8 +2935,8 @@ struct Model::Impl {
             }
             l.k_exp = l.mtp ? g.d_k : g.k_exp;
             if (g.glm5) {
-                l.kda = std::find(g.mla.begin(), g.mla.end(), il) == g.mla.end();
-                l.dense = il < g.dense_layers;
+                l.kda = !l.mtp && std::find(g.mla.begin(), g.mla.end(), il) == g.mla.end();
+                l.dense = !l.mtp && il < g.dense_layers;
                 if (o.experts >= 1) l.k_exp = std::min(l.k_exp, o.experts);
                 if (l.dense) {   // (no experts at all: every expert tier's loop passes over it)
                     l.n_exp = l.k_exp = 0;
@@ -3012,7 +3030,7 @@ struct Model::Impl {
         for (Layer& l : L) {
             const std::string& P = l.name;
             size_t b = 0;
-            if (l.mtp && l.il == g.nl) b += mat_bytes("mtp.0.main_proj");
+            if (l.mtp && l.il == g.nl && !g.glm5) b += mat_bytes("mtp.0.main_proj");
             for (const char* m : {"attn.wq_a", "attn.wq_b", "attn.wkv", "attn.wo_b", "ffn.shared_experts.w1",
                                   "ffn.shared_experts.w2", "ffn.shared_experts.w3", "attn.compressor.wkv",
                                   "attn.compressor.wgate", "attn.indexer.wq_b", "attn.indexer.wk", "engram.wkv"})
@@ -3048,9 +3066,9 @@ struct Model::Impl {
             double cum = 0, target = avail[0] / avail_sum * need_sum;
             std::vector<Layer*> order;   // the drafter's blocks first (the first GPU), then the trunk's layers
             for (Layer& l : L)
-                if (l.mtp) order.push_back(&l);
+                if (l.mtp && !g.glm5) order.push_back(&l);
             for (Layer& l : L)
-                if (!l.mtp) order.push_back(&l);
+                if (!l.mtp || g.glm5) order.push_back(&l);
             for (Layer* lp : order) {
                 Layer& l = *lp;
                 const double lb = (double) l.dense_bytes + (double) l.blob * l.n_exp;
@@ -3121,6 +3139,7 @@ struct Model::Impl {
                     for (int j = 0; j < n[gi] && il < g.nl; ++j) L[(size_t) il++].grp = (int) gi;
                 for (; il < g.nl; ++il) L[(size_t) il].grp = (int) groups.size() - 1;
             }
+            if (g.glm5 && g.n_mtp > 0) L[(size_t) g.nl].grp = L[(size_t) g.nl - 1].grp;   // (block 45 reads the head)
             for (Layer& l : L) {
                 l.dev = groups[(size_t) l.grp].mem[0];
                 l.nm = l.mtp ? 1 : (int) groups[(size_t) l.grp].mem.size();   // (the drafter's blocks: on the lead alone)
@@ -3301,9 +3320,15 @@ struct Model::Impl {
                      dalloc(d, d.g_d1, W * g.dense_ff, err) && dalloc(d, d.g_d3, W * g.dense_ff, err) &&
                      dalloc(d, d.g_dh, W * g.dense_ff, err);
                 const size_t C = kGlmChunk;
+                if (img_tok >= 0 && (!dalloc(d, d.g_img, W * D, err) || !dalloc(d, d.g_imgat, W, err))) return false;
                 if (!gk || !dalloc(d, d.g_H, C * H * D, err) || !dalloc(d, d.g_H2, C * H * D, err) || !dalloc(d, d.g_cx, C * D, err) ||
                     !dalloc(d, d.g_cm, C * D, err) || !dalloc(d, d.g_cpost, C * 8, err) || !dalloc(d, d.g_ccomb, C * 64, err) ||
                     !dalloc(d, d.g_cw, C * kPicks, err) || !dalloc(d, d.g_cidx, C * kPicks, err) || !dalloc(d, d.g_cpu, C * D, err))
+                    return false;
+                if (g.n_mtp > 0 && (int) di == head_dev &&
+                    (!dalloc(d, d.g_me, W * D, err) || !dalloc(d, d.g_mx, W * 2 * D, err) || !dalloc(d, d.g_mu, W * D, err) ||
+                     !dalloc(d, d.g_mz, D, err) || !dalloc(d, d.g_mw, W * D, err) || !dalloc(d, d.g_mh, (C + 1) * D, err) ||
+                     !dalloc(d, d.g_mc, 1, err) || !dalloc(d, d.g_mt, 1, err) || !dalloc(d, mtp_ring, (size_t) kMtpRing * D, err)))
                     return false;
             }
             d.attn_scr.cap = (int) topk_stride();
@@ -3434,6 +3459,14 @@ struct Model::Impl {
             }
             cudaSetDevice(d.id);
             if (!upload(d, *t, d.g_emb, err)) return false;
+            if (g.n_mtp > 0) {
+                Dev& hd = devs[(size_t) head_dev];
+                if (hd.g_emb == nullptr) {
+                    if (!dalloc(hd, hd.g_emb, (size_t) t->bytes, err, &hd.weights)) return false;
+                    cudaSetDevice(hd.id);
+                    if (!upload(hd, *t, hd.g_emb, err)) return false;
+                }
+            }
         } else {
             const Tensor* t = pk.get("embed.weight");
             const size_t nv = (size_t) g.vocab * g.dim;
@@ -3985,7 +4018,7 @@ struct Model::Impl {
         for (const auto& kt : pk.t) {
             const std::string& n = kt.first;
             if (n.find(".engram.embed.") != std::string::npos || n.rfind("vision.", 0) == 0 || n == "embed.weight" ||
-                (!o.dspark && n.rfind("mtp.", 0) == 0))
+                (!o.dspark && (n.rfind("mtp.", 0) == 0 || n.rfind("nextn.", 0) == 0)))
                 continue;
             (n.find(".ffn.experts.") != std::string::npos ? exp_b : other_b) += (double) kt.second.bytes;
         }
@@ -5177,10 +5210,15 @@ struct Model::Impl {
         const std::string A = P + "attn.", I = A + "indexer.", K = P + "kda.";
         const size_t DI = (size_t) g.kda_heads * g.kda_hd;
         bool ok = f32(d, P + "attn_norm.weight", l.attn_norm, err, acct, (size_t) g.dim) &&
-                  f32(d, P + "ffn_norm.weight", l.ffn_norm, err, acct, (size_t) g.dim) &&
-                  f32(d, P + "hc_attn_fn", l.hca_fn, err, acct) && f32(d, P + "hc_attn_scale", l.hca_scale, err, acct) &&
-                  f32(d, P + "hc_attn_base", l.hca_base, err, acct) && f32(d, P + "hc_ffn_fn", l.hcf_fn, err, acct) &&
-                  f32(d, P + "hc_ffn_scale", l.hcf_scale, err, acct) && f32(d, P + "hc_ffn_base", l.hcf_base, err, acct);
+                  f32(d, P + "ffn_norm.weight", l.ffn_norm, err, acct, (size_t) g.dim);
+        if (ok && l.mtp)   // (a plain residual: no hyper-connections)
+            ok = mat(d, P + "eh_proj", l.m_eh, err, acct) && f32(d, P + "enorm.weight", l.m_en, err, acct, (size_t) g.dim) &&
+                 f32(d, P + "hnorm.weight", l.m_hn, err, acct, (size_t) g.dim) &&
+                 f32(d, P + "shared_head_norm.weight", l.m_sn, err, acct, (size_t) g.dim);
+        else if (ok)
+            ok = f32(d, P + "hc_attn_fn", l.hca_fn, err, acct) && f32(d, P + "hc_attn_scale", l.hca_scale, err, acct) &&
+                 f32(d, P + "hc_attn_base", l.hca_base, err, acct) && f32(d, P + "hc_ffn_fn", l.hcf_fn, err, acct) &&
+                 f32(d, P + "hc_ffn_scale", l.hcf_scale, err, acct) && f32(d, P + "hc_ffn_base", l.hcf_base, err, acct);
         if (!ok) return false;
         if (l.kda) {
             ok = mat(d, K + "wq", l.k_wq, err, acct) && mat(d, K + "wk", l.k_wk, err, acct) &&
@@ -5192,6 +5230,9 @@ struct Model::Impl {
                  f32(d, K + "dt_bias", l.k_dt, err, acct, DI) && f32(d, K + "a", l.k_a, err, acct, (size_t) g.kda_heads) &&
                  f32(d, K + "norm.weight", l.k_norm, err, acct, (size_t) g.kda_hd) &&
                  dalloc(d, l.k_state, DI * g.kda_hd, err, &d.caches) && dalloc(d, l.k_conv, 9 * DI, err, &d.caches);
+            if (ok && g.n_mtp > 0)   // (what a rejected draft goes back to: the state after each row of a verify window but the last)
+                ok = dalloc(d, l.k_bak, (size_t) g.d_block * DI * g.kda_hd, err, &d.caches) &&
+                     dalloc(d, l.k_cbak, (size_t) g.d_block * 9 * DI, err, &d.caches);
             if (!ok) return false;
         } else {
             const size_t cap = (size_t) o.max_context + 64;
@@ -5314,10 +5355,10 @@ struct Model::Impl {
             const int hn = head_nm();
             if (!mat(d, "head", d.head, err, acct, d.mi, hn, true) || !f32(d, "norm.weight", d.norm_w, err, acct, (size_t) g.dim))
                 return false;
-            if (g.n_mtp > 0 && !f32(d, "mtp." + std::to_string(g.n_mtp - 1) + ".norm.weight", d.d_norm, err, acct, (size_t) g.dim))
+            if (g.n_mtp > 0 && !g.glm5 && !f32(d, "mtp." + std::to_string(g.n_mtp - 1) + ".norm.weight", d.d_norm, err, acct, (size_t) g.dim))
                 return false;
             if (!dalloc(d, d.logits_part, (size_t) kWin * ((g.vocab / 128 + hn - 1) / hn * 128), err)) return false;
-            if (g.n_mtp > 0 && hn > 1) {   // the markov steps over the group (mk_split): this member's rows of the head
+            if (g.n_mtp > 0 && !g.glm5 && hn > 1) {   // the markov steps over the group (mk_split): this member's rows of the head
                 const Tensor* th = pk.get("mtp." + std::to_string(g.n_mtp - 1) + ".markov_head.head.weight");
                 const int R = g.d_rank;
                 head_cols(hn, d.mi, d.mk_v0, d.mk_vn);   // (its share of the head's columns: the same rows)
@@ -5342,7 +5383,7 @@ struct Model::Impl {
             head = d.head;
             norm_w = d.norm_w;
             d_norm = d.d_norm;
-            if (g.n_mtp > 0) {
+            if (g.n_mtp > 0 && !g.glm5) {
                 const std::string Z = "mtp." + std::to_string(g.n_mtp - 1) + ".";
                 if (!f32(d, Z + "confidence_head.proj.weight", d_conf, err, acct, (size_t) (g.dim + g.d_rank)))
                     return false;
@@ -5359,7 +5400,7 @@ struct Model::Impl {
                     return false;
             }
         }
-        if (g.n_mtp > 0 && di == d_dev) {
+        if (g.n_mtp > 0 && di == d_dev && !g.glm5) {
             if (!mat(d, "mtp.0.main_proj", d_main_proj, err, acct) ||
                 !f32(d, "mtp.0.main_norm.weight", d_main_norm, err, acct, (size_t) g.dim))
                 return false;
@@ -7143,6 +7184,11 @@ struct Model::Impl {
             q.c_lat.assign((size_t) nmem, nullptr);
             q.i_kg.assign((size_t) nmem, nullptr);
             q.i_pool.assign((size_t) nmem, nullptr);
+            if (s == 0) q.mtp_ring = mtp_ring;
+            else if (g.glm5 && g.n_mtp > 0) {
+                Dev& hd = devs[(size_t) head_dev];
+                if (!dalloc(hd, q.mtp_ring, (size_t) kMtpRing * g.dim, err, &hd.caches)) return false;
+            }
             for (size_t i = 0; i < L.size(); ++i)
                 for (int m = 0; m < L[i].nm; ++m) {
                     Layer& l = member(L[i], m);
@@ -7247,6 +7293,7 @@ struct Model::Impl {
         q.mk = std::move(mk);
         q.mark_clock = mark_clock;
         q.slot_held = slot_held;
+        q.mtp_fill = mtp_fill;
         toks.clear();
         ctoks.clear();
         mk.clear();
@@ -7260,6 +7307,7 @@ struct Model::Impl {
         mk = std::move(q.mk);
         mark_clock = q.mark_clock;
         slot_held = q.slot_held;
+        mtp_fill = q.mtp_fill;
         q.toks.clear();
         q.ctoks.clear();
         q.mk.clear();
@@ -7280,6 +7328,7 @@ struct Model::Impl {
                 l.i_kg = q.i_kg[k];
                 l.i_pool = q.i_pool[k];
             }
+        mtp_ring = q.mtp_ring;
         if (mtp_only) return;
         for (size_t j = 0; j < srcs.size(); ++j)
             for (size_t di = 0; di < devs.size(); ++di) {
@@ -7301,6 +7350,7 @@ struct Model::Impl {
 
     void reset() {
         pos = 0;
+        mtp_fill = 0;
         toks.clear();
         ctoks.clear();
         slot_held = false;
@@ -7891,6 +7941,7 @@ struct Model::Impl {
     // host; a prompt's pictures as their spans' rows (set_images)
     VisionTower vt;
     VisionGeo vg;
+    Glm5Vision gv;       // GLM-5.3's: its own tower (mmproj, projector glm5v)
     int img_tok = -1;
     std::string vision_err;              // why the tower did not load (pictures off), or empty
     std::vector<uint16_t> img_mark[3];   // image_start, image_newline, image_end: BF16 [dim]
@@ -7909,7 +7960,49 @@ struct Model::Impl {
         }
         return true;
     }
+    bool load_vision_glm5(std::string& err) {
+        const int tok = (int) pk.num("image_token_id", -1);
+        Glm5VisionGeo v;
+        v.layers = (int) pk.num("vision.num_hidden_layers", 0);
+        if (v.layers <= 0 || tok < 0) return true;   // (a pack without the mmproj)
+        v.dim = (int) pk.num("vision.hidden_size", 1024), v.heads = (int) pk.num("vision.num_attention_heads", 16);
+        v.ff = (int) pk.num("vision.intermediate_size", 4096), v.patch = (int) pk.num("vision.patch_size", 14);
+        v.merge = (int) pk.num("vision.downsample_ratio", 2), v.proj_ff = (int) pk.num("vision.projector_ff", 10240);
+        v.max_tokens = (int) pk.num("vision.max_image_tokens", 4096), v.out = g.dim;
+        v.theta = (float) pk.num("vision.rope_theta", 1e4), v.eps = (float) pk.num("vision.eps", 1e-5);
+        v.clamp = (float) pk.num("vision.swiglu_clamp", 10.0);
+        for (int i = 0; i < 3; ++i) {
+            v.mean[i] = (float) pk.num("vision.image_mean." + std::to_string(i), 0.0);
+            v.std[i] = (float) pk.num("vision.image_std." + std::to_string(i), 1.0);
+        }
+        const double t0 = now_ms();
+        std::vector<uint16_t> tmp;
+        auto read = [&](const std::string& n, size_t count, float* dst) {
+            const Tensor* t = pk.get(n);
+            if (t == nullptr) return false;
+            if (t->dtype == "F32") return t->bytes == count * 4 && pk.read(*t, dst);
+            if (t->dtype != "BF16" || t->bytes != count * 2) return false;
+            tmp.resize(count);
+            if (!pk.read(*t, tmp.data())) return false;
+            for (size_t i = 0; i < count; ++i) {
+                const uint32_t u = (uint32_t) tmp[i] << 16;
+                std::memcpy(dst + i, &u, 4);
+            }
+            return true;
+        };
+        Dev& d = devs[0];
+        if (!gv.load(v, d.id, read, err)) return false;
+        vg.patch = v.patch, vg.merge = v.merge, vg.max_tokens = v.max_tokens;
+        img_tok = tok;
+        CK(cudaSetDevice(d.id));
+        CK(cudaMemGetInfo(&d.free0, &d.total));   // (the split sees what the tower left)
+        d.free0 = uma_free(d.id, d.free0);
+        std::fprintf(stderr, "ds4: GLM-5.3 vision tower (%d blocks) on CUDA%d: %.0f MiB, up to %d patches, %.1f s\n", v.layers, d.id,
+                     (double) gv.device_bytes() / (1 << 20), gv.max_patches(), (now_ms() - t0) / 1000.0);
+        return true;
+    }
     bool load_vision(std::string& err) {
+        if (g.glm5) return load_vision_glm5(err);
         vg.layers = (int) pk.num("vision.num_hidden_layers", 0);
         const int tok = (int) pk.num("image_token_id", -1);
         if (vg.layers <= 0 || tok < 0 || pk.get("vision.patch_embed.proj.weight") == nullptr) return true;   // none
@@ -7976,6 +8069,7 @@ struct Model::Impl {
             err = "this model has no vision tower (or it is off)";
             return false;
         }
+        if (g.glm5) return gv.encode(rgb, w, h, span, err);   // (no markers: the template writes them, around the image tokens)
         std::vector<uint16_t> rows;
         int nh = 0, nw = 0;
         if (!vt.encode(rgb, w, h, rows, nh, nw, err)) return false;
@@ -10969,7 +11063,7 @@ struct Model::Impl {
     // (block - 1)] at positions pos .. through the blocks (each query attending to the ring and to the whole block),
     // the trunk's head, the markov bias token by token (greedy) and the confidence head.
     bool seed_drafter(int64_t p0, int n, int row0, std::string& err) {
-        if (g.n_mtp == 0 || n <= 0) return true;
+        if (g.n_mtp == 0 || n <= 0 || g.glm5) return true;
         if (n > kWin * kPicks) {
             err = "seeding the drafter with " + std::to_string(n) + " rows";
             return false;
@@ -11035,7 +11129,7 @@ struct Model::Impl {
         dq_min_p = min_p;
         dq_seed = seed;
         dq_counter = counter;
-        const bool ok = draft_(y, out, conf, err);
+        const bool ok = g.glm5 ? glm5_draft(y, out, conf, err) : draft_(y, out, conf, err);
         if (!ok) drafts_q = false;
         if (max_drafts > 0 && (int) out.size() > max_drafts) {
             out.resize((size_t) max_drafts);
@@ -11217,7 +11311,7 @@ struct Model::Impl {
     // is not used here: one conversation drafts exactly as before.
     bool can_draft_multi(const int* sv, int n) const {
         const int T = g.d_block;
-        if (g.n_mtp == 0 || sqs.empty() || n < 2 || T < 1 || n * T > kWin || n * (T + 1) > kWin + 2 || dump_d != nullptr)
+        if (g.glm5 || g.n_mtp == 0 || sqs.empty() || n < 2 || T < 1 || n * T > kWin || n * (T + 1) > kWin + 2 || dump_d != nullptr)
             return false;
         for (int c = 0; c < n; ++c) {
             if (sv[c] < 0 || sv[c] >= (int) sqs.size() || seq_pos(sv[c]) + T > o.max_context) return false;
@@ -11534,7 +11628,8 @@ struct Model::Impl {
                                       p0 + 1 + n);
         }
         drafts_q = false;
-        rollback(p0, T, m + 1);
+        if (g.glm5) glm5_rollback(p0, T, m + 1);
+        else rollback(p0, T, m + 1);
         if (!seed_drafter(p0, m + 1, 0, err)) return false;
         accepted = m;
         st.drafts_offered += n;
@@ -13673,6 +13768,7 @@ struct Model::Impl {
             if (g.glm5) {
                 CK(cudaMemcpyAsync(d.tok, wplan.nrow > 0 ? wplan.rtok : toks.data() + p0, (size_t) T * 4, cudaMemcpyHostToDevice, d.st));
                 glm5::embed_q8(d.g_emb, d.tok, T, D, H, d.h, d.st);
+                if (wplan.nrow == 0 && !glm5_picture_rows(d, p0, T, d.h, err)) return false;
             } else {
                 CK(emb_upload(d.emb_rows, h_emb, (size_t) T * D * 2, d.st));
                 embed(d.emb_rows, T, d.h, D, H, d.st);
@@ -13731,6 +13827,7 @@ struct Model::Impl {
             err = "the head is not on the last layer's GPU";
             return false;
         }
+        if (g.glm5 && g.n_mtp > 0) glm5_mtp_keep(devs[(size_t) head_dev], p0, T);
         return head_rows_dev(head_dev, T, err);
     }
 
@@ -14177,6 +14274,154 @@ struct Model::Impl {
     // layer L0 for the window, as group member mi (its share of the heads, of the output projection and of the FFNs;
     // the partial sums all-reduced across the group)
     // GLM-5.3's attention sub-block, KDA or sparse MLA, through the hyper-connections: d.h in, d.h out
+    // a window's rows inside a picture's span: the tower's, over the embedding's
+    bool glm5_picture_rows(Dev& d, int64_t p0, int T, float* h, std::string& err) {
+        (void) err;
+        if (imgs.empty()) return true;
+        int at[kWin], n = 0;
+        for (int t = 0; t < T; ++t) {
+            const uint16_t* r = in_image(p0 + t) ? image_row(p0 + t) : nullptr;
+            if (r == nullptr) continue;
+            CK(cudaMemcpyAsync(d.g_img + (size_t) n * g.dim, r, (size_t) g.dim * 2, cudaMemcpyHostToDevice, d.st));
+            at[n++] = t;
+        }
+        if (n == 0) return true;
+        CK(cudaMemcpyAsync(d.g_imgat, at, (size_t) n * 4, cudaMemcpyHostToDevice, d.st));
+        glm5::embed_over(d.g_img, d.g_imgat, n, g.dim, g.hc, h, d.st);
+        return true;
+    }
+    // ---- GLM-5.3's multi-token head (block 45, llama.cpp's graph_mtp).  Row p of its caches is (the trunk's final hidden row of
+    // p - 1, token p): a prompt's rows write only those caches (nothing later reads their attention or experts), the row of the
+    // token just picked goes through the whole block and the head.  Its rows are by position, so a rejected draft needs no undoing
+    // here; the trunk's KDA state does (glm5_rollback).
+    void glm5_mtp_keep(Dev& d, int64_t p0, int T) {
+        const int D = g.dim, H = g.hc;
+        cudaSetDevice(d.id);
+        hc_pre_norm(d.h, d.pre, d.norm_w, D, H, T, g.eps, d.g_mw, d.st);
+        for (int t = 0; t < T; ++t) {
+            const bool multi = wplan.nrow > 0;
+            float* ring = multi ? sqs[(size_t) wplan.rseq[t]].mtp_ring : mtp_ring;
+            const int64_t p = multi ? wplan.rpos[t] : p0 + t;
+            cudaMemcpyAsync(ring + (size_t) (p % kMtpRing) * D, d.g_mw + (size_t) t * D, (size_t) D * 4, cudaMemcpyDeviceToDevice, d.st);
+        }
+    }
+    // rows p0 .. p0 + T - 1: u (d.g_mu) and the attention's input (d.x); row t's hidden row at h + ((first + t) % ring) * dim
+    bool glm5_mtp_u(Layer& l, Dev& d, const int* tk, int T, int64_t p0, const float* h, int ring, int first, std::string& err) {
+        cudaStream_t s = d.st;
+        const int D = g.dim;
+        CK(cudaMemcpyAsync(d.tok, tk, (size_t) T * 4, cudaMemcpyHostToDevice, s));
+        glm5::embed_q8(d.g_emb, d.tok, T, D, 1, d.g_me, s);
+        glm5::mtp_in(d.g_me, h, ring, first, p0 == 0, l.m_en, l.m_hn, D, T, g.eps, d.g_mx, s);
+        if (!mv(d, {job(l.m_eh, d.g_mx, d.g_mu, T, (size_t) 2 * D, D)}, err)) return false;
+        glm5::rms_rows(d.g_mu, l.attn_norm, D, T, (size_t) D, g.eps, d.x, s);
+        return true;
+    }
+    // ... and only what the caches keep of them
+    bool glm5_mtp_kv(Layer& l, Dev& d, int T, int64_t p0, std::string& err) {
+        cudaStream_t s = d.st;
+        const int D = g.dim, R = g.hd, ID = g.ix_hd, KP = g.kpool;
+        if (!mv(d, {job(l.wkv, d.x, d.kvr, T, D, R), job(l.i_wk, d.x, d.ikr, T, D, ID), job(l.i_wgate, d.x, d.g_ig, T, D, ID)}, err))
+            return false;
+        glm5::mla_latent(d.kvr, l.kv_norm, R, T, g.eps, l.c_lat, p0, s);
+        glm5::idx_rows(d.ikr, d.g_ig, l.ik_norm, l.ik_bias, ID, T, g.ln_eps, l.i_kg, p0, s);
+        glm5::idx_pool(l.i_kg, l.i_ape, ID, KP, p0 / KP, (int) ((p0 + T) / KP - p0 / KP), l.i_pool, s);
+        return true;
+    }
+    // a chunk of a prompt: d.g_H holds its final streams
+    bool glm5_mtp_chunk(Dev& d, int64_t p0, const int* tk, int T, std::string& err) {
+        Layer& l = L[(size_t) g.nl];
+        cudaStream_t s = d.st;
+        const int D = g.dim, H = g.hc;
+        const size_t row = (size_t) H * D;
+        if (p0 > 0)
+            CK(cudaMemcpyAsync(d.g_mh, mtp_ring + (size_t) ((p0 - 1) % kMtpRing) * D, (size_t) D * 4, cudaMemcpyDeviceToDevice, s));
+        for (int w = 0; w < T; w += kWin) {
+            const int Tw = std::min(kWin, T - w);
+            glm5::fill_mean_pre(d.pre, Tw, H, s);
+            hc_pre_norm(d.g_H + (size_t) w * row, d.pre, d.norm_w, D, H, Tw, g.eps, d.g_mh + (size_t) (w + 1) * D, s);
+        }
+        for (int w = 0; w < T; w += kWin) {
+            const int Tw = std::min(kWin, T - w);
+            if (!glm5_mtp_u(l, d, tk + w, Tw, p0 + w, d.g_mh, kGlmChunk + 1, w, err) || !glm5_mtp_kv(l, d, Tw, p0 + w, err)) return false;
+        }
+        CK(cudaMemcpyAsync(mtp_ring + (size_t) ((p0 + T - 1) % kMtpRing) * D, d.g_mh + (size_t) T * D, (size_t) D * 4,
+                           cudaMemcpyDeviceToDevice, s));
+        mtp_fill = p0 + T;
+        return true;
+    }
+    // token tk at position p through the whole block: the head's pick, and its z in d.g_mz for a next draft
+    bool glm5_mtp_row(Layer& l, Dev& d, int tk, int64_t p, const float* h, int ring, int first, int& pick, float& conf, std::string& err) {
+        cudaStream_t s = d.st;
+        const int D = g.dim;
+        if (!glm5_mtp_u(l, d, &tk, 1, p, h, ring, first, err)) return false;
+        GlmRun run{0, 1, p, nullptr, nullptr, l.c_lat, l.i_kg, l.i_pool};
+        if (!glm5_mla(l, d, &run, 1, 1, err)) return false;
+        glm5::add(d.g_mu, d.ao, (size_t) D, s);   // r
+        glm5::rms_rows(d.ao, l.ffn_norm, D, 1, (size_t) D, g.eps, d.g_cx, s);
+        gemv_f32(l.gate_w, d.g_cx, l.n_exp, D, 1, d.glog, 1024, s);
+        glm5::route(d.glog, 1024, l.gate_bias, l.n_exp, l.k_exp, 1, g.route_scale, d.g_cidx, d.g_cw, kPicks, s);
+        if (!mv(d, {job(l.s1, d.g_cx, d.sg, 1, D, g.ff), job(l.s3, d.g_cx, d.su, 1, D, g.ff)}, err)) return false;
+        swiglu(d.sg, d.su, g.ff, g.lim, d.sh, s);
+        if (!mv(d, {job(l.s2, d.sh, d.g_cm, 1, g.ff, D)}, err)) return false;
+        if (!glm5_moe_chunk(l, d, 1, err)) return false;
+        glm5::add(d.ao, d.g_cm, (size_t) D, s);   // z
+        glm5::rms_rows(d.g_cm, l.m_sn, D, 1, (size_t) D, g.eps, d.g_mz, s);
+        if (!head_share(d, d.mi, d.g_mz, 1, err)) return false;
+        glm5::argmax_conf(d.logits, g.vocab, d.g_mt, d.g_mc, s);
+        CK(cudaMemcpyAsync(h_idx, d.g_mt, 4, cudaMemcpyDeviceToHost, s));
+        CK(cudaMemcpyAsync(h_w, d.g_mc, 4, cudaMemcpyDeviceToHost, s));
+        CK(cudaStreamSynchronize(s));
+        pick = h_idx[0];
+        conf = h_w[0];
+        return true;
+    }
+    bool glm5_draft(int y, std::vector<int>& out, std::vector<float>& conf, std::string& err) {
+        const int64_t p = pos;
+        if (g.n_mtp == 0 || p < 1 || p + g.d_block > o.max_context) return true;
+        Layer& l = L[(size_t) g.nl];
+        Dev& d = devs[(size_t) l.dev];
+        cudaSetDevice(d.id);
+        const double t0 = now_ms();
+        // the positions the block has not seen (a round's kept rows; the ring's reach at most)
+        int64_t from = std::max<int64_t>(mtp_fill, std::max<int64_t>(1, p - kMtpRing + 2));
+        for (int64_t a = from; a < p; a += kWin) {
+            const int T = (int) std::min<int64_t>(kWin, p - a);
+            if (!glm5_mtp_u(l, d, toks.data() + a, T, a, mtp_ring, kMtpRing, (int) ((a - 1) % kMtpRing), err) ||
+                !glm5_mtp_kv(l, d, T, a, err))
+                return false;
+        }
+        int tk = y;
+        for (int i = 0; i < g.d_block; ++i) {
+            int pick = -1;
+            float c = 0.0f;
+            const bool first = i == 0;
+            if (!glm5_mtp_row(l, d, tk, p + i, first ? mtp_ring : d.g_mz, first ? kMtpRing : 1, first ? (int) ((p - 1) % kMtpRing) : 0, pick, c, err))
+                return false;
+            out.push_back(pick);
+            conf.push_back(c);
+            tk = pick;
+        }
+        mtp_fill = p + 1;
+        st.draft_ms += now_ms() - t0;
+        return true;
+    }
+    // a verify window keeps its first `keep` rows: the KDA state goes back to after row keep - 1
+    void glm5_rollback(int64_t p0, int T, int keep) {
+        if (keep < T) {
+            const size_t ns = glm5_state_floats(), nc = glm5_conv_floats();
+            for (Layer& l : L) {
+                if (l.k_state == nullptr) continue;
+                Dev& d = devs[(size_t) l.dev];
+                cudaSetDevice(d.id);
+                cudaMemcpyAsync(l.k_state, l.k_bak + (size_t) (keep - 1) * ns, ns * 4, cudaMemcpyDeviceToDevice, d.st);
+                cudaMemcpyAsync(l.k_conv, l.k_cbak + (size_t) (keep - 1) * nc, nc * 4, cudaMemcpyDeviceToDevice, d.st);
+            }
+        }
+        pos = p0 + keep;
+        toks.resize((size_t) pos);
+        ctoks.resize((size_t) pos);
+        slot_held = false;
+    }
     // the rows of a window by conversation: its state, and where its rows start (one run unless a multi step's)
     struct GlmRun {
         int r0 = 0, n = 0;
@@ -14217,18 +14462,31 @@ struct Model::Impl {
                     err))
                 return false;
             if (!mv(d, {job(l.k_fb, d.g_fa, d.g_graw, T, HD, DI), job(l.k_gb, d.g_ga, d.g_g2, T, HD, DI)}, err)) return false;
+            const bool bak = spec_win && l.k_bak != nullptr;
+            const size_t nc = glm5_conv_floats();
             for (int r = 0; r < nruns; ++r) {
                 const GlmRun& u = runs[r];
                 const size_t o1 = (size_t) u.r0 * DI;
-                glm5::kda_conv(d.g_xq + o1, l.k_cq, u.cv, u.n, NH, HD, true, s);
-                glm5::kda_conv(d.g_xk + o1, l.k_ck, u.cv + (size_t) 3 * DI, u.n, NH, HD, true, s);
-                glm5::kda_conv(d.g_xv + o1, l.k_cv, u.cv + (size_t) 6 * DI, u.n, NH, HD, false, s);
+                glm5::kda_conv(d.g_xq + o1, l.k_cq, u.cv, u.n, NH, HD, true, s, bak ? l.k_cbak : nullptr, nc);
+                glm5::kda_conv(d.g_xk + o1, l.k_ck, u.cv + (size_t) 3 * DI, u.n, NH, HD, true, s, bak ? l.k_cbak + (size_t) 3 * DI : nullptr, nc);
+                glm5::kda_conv(d.g_xv + o1, l.k_cv, u.cv + (size_t) 6 * DI, u.n, NH, HD, false, s, bak ? l.k_cbak + (size_t) 6 * DI : nullptr, nc);
                 glm5::kda_scan(d.g_xq + o1, d.g_xk + o1, d.g_xv + o1, d.g_graw + o1, d.g_beta + (size_t) u.r0 * NH, l.k_a, l.k_dt, g.kda_lb,
-                               u.st, u.n, NH, HD, d.g_ko + o1, s);
+                               u.st, u.n, NH, HD, d.g_ko + o1, s, bak ? l.k_bak : nullptr);
             }
             glm5::kda_out_norm(d.g_ko, d.g_g2, l.k_norm, T, NH, HD, g.eps, s);
             if (!mv(d, {job(l.k_wo, d.g_ko, d.ao, T, DI, D)}, err)) return false;
-        } else {
+        } else if (!glm5_mla(l, d, runs, nruns, T, err)) {
+            return false;
+        }
+        hc_post(d.ao, d.h, d.a_post, d.a_comb, D, H, T, d.h2, s);
+        std::swap(d.h, d.h2);
+        return true;
+    }
+    // the sparse attention over d.x (its input rows), the result in d.ao
+    bool glm5_mla(Layer& l, Dev& d, const GlmRun* runs, int nruns, int T, std::string& err) {
+        cudaStream_t s = d.st;
+        const int D = g.dim;
+        {
             const int NH = g.heads, R = g.hd, QK = g.qk_hd, VD = g.v_hd, IH = g.ix_heads, ID = g.ix_hd, KP = g.kpool;
             if (!mv(d, {job(l.wq_a, d.x, d.qr, T, D, g.q_lora), job(l.wkv, d.x, d.kvr, T, D, R), job(l.i_wk, d.x, d.ikr, T, D, ID),
                         job(l.i_wgate, d.x, d.g_ig, T, D, ID)}, err))
@@ -14271,8 +14529,6 @@ struct Model::Impl {
             glm5::bmv_q8(l.m_vb, d.o, (size_t) NH * R, NH, VD, R, T, d.g_ob, (size_t) NH * VD, s);
             if (!mv(d, {job(l.mla_wo, d.g_ob, d.ao, T, (size_t) NH * VD, D)}, err)) return false;
         }
-        hc_post(d.ao, d.h, d.a_post, d.a_comb, D, H, T, d.h2, s);
-        std::swap(d.h, d.h2);
         return true;
     }
     // a leading dense block's FFN through the hyper-connections
@@ -14411,6 +14667,7 @@ struct Model::Impl {
                 const int Tw = std::min(kWin, T - w);
                 CK(cudaMemcpyAsync(d.tok, tk + w, (size_t) Tw * 4, cudaMemcpyHostToDevice, s));
                 glm5::embed_q8(d.g_emb, d.tok, Tw, D, H, d.g_H + (size_t) w * row, s);
+                if (!glm5_picture_rows(d, p0 + w, Tw, d.g_H + (size_t) w * row, err)) return false;
             }
         for (int il = il0; il < il1; ++il) {
             Layer& l = L[(size_t) il];
@@ -14447,6 +14704,7 @@ struct Model::Impl {
             hc_post(d.g_cm, d.g_H, d.g_cpost, d.g_ccomb, D, H, T, d.g_H2, s);
             std::swap(d.g_H, d.g_H2);
         }
+        if (il1 == g.nl && g.n_mtp > 0 && !glm5_mtp_chunk(d, p0, tk, T, err)) return false;
         CK(cudaStreamSynchronize(s));
         return true;
     }
@@ -15446,8 +15704,8 @@ struct Model::Impl {
                           "INFO vision=ds4 vision_patch=%d vision_merge=%d vision_min_pixels=%lld vision_max_tokens=%d "
                           "vision_max_wh_ratio=%lld image_token=%d vision_gpu=%d vision_mib=%lld vision_lazy=%d",
                           vg.patch, vg.merge, (long long) pk.num("vision.min_pixels", 0), vg.max_tokens,
-                          (long long) pk.num("vision.max_wh_ratio", 0), img_tok, vt.device(),
-                          (long long) (vt.device_bytes() >> 20), vt.lazy() ? 1 : 0);
+                          (long long) pk.num("vision.max_wh_ratio", 0), img_tok, g.glm5 ? gv.device() : vt.device(),
+                          (long long) ((g.glm5 ? gv.device_bytes() : vt.device_bytes()) >> 20), vt.lazy() ? 1 : 0);
             v.push_back(b);
         } else if (!vision_err.empty()) {   // (the server offers no pictures and says why)
             std::string why = vision_err;
@@ -15603,6 +15861,7 @@ bool Model::step_multi_spec(const int* seqs, const int* const* toks, const int* 
     return p_->step_runs(seqs, toks, lens, n, true, err);
 }
 bool Model::can_draft_multi(const int* seqs, int n) const { return p_->can_draft_multi(seqs, n); }
+bool Model::spec_together() const { return !p_->g.glm5; }
 bool Model::draft_multi(const int* seqs, const int* ys, int n, std::vector<std::vector<int>>& d,
                         std::vector<std::vector<float>>& c, std::string& err) {
     return p_->draft_multi(seqs, ys, n, d, c, err);

@@ -1676,7 +1676,7 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
                 Act& a = *need[(size_t) i];
                 int room = (int) std::min<long long>(a.limit - a.produced, m.max_context() - m.seq_pos(a.seq));
                 rooms[(size_t) i] = room = std::min(room, share);
-                if (!((a.r.spec < 0 ? spec : a.r.spec != 0) && !a.cool && room > 1 && m.draft_block() > 0)) continue;
+                if (!((a.r.spec < 0 ? spec : a.r.spec != 0) && !a.cool && room > 1 && m.draft_block() > 0 && m.spec_together())) continue;
                 tried[(size_t) i] = 1;
                 dsv.push_back(a.seq);
                 dys.push_back(a.tok);

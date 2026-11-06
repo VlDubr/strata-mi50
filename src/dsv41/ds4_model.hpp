@@ -221,6 +221,7 @@ public:
     /// together.  can_draft_multi: whether these conversations fit one pass (their blocks in a window, each its
     /// block's room in its context); else each drafts alone with draft().
     bool can_draft_multi(const int* seqs, int n) const;
+    bool spec_together() const;   // several conversations' rows can be verify windows (GLM-5.3: a conversation alone drafts)
     bool draft_multi(const int* seqs, const int* ys, int n, std::vector<std::vector<int>>& drafts,
                      std::vector<std::vector<float>>& conf, std::string& err);
     bool verify_multi(int i, const std::vector<int>& drafts, float temperature, float top_p, int top_k, float min_p,

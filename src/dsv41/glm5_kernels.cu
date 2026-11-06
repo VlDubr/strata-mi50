@@ -53,6 +53,15 @@ __global__ void fill_kernel(float* pre, int T, float v, int hc) {
     if (i < T * 8) pre[i] = (i & 7) < hc ? v : 0.0f;
 }
 
+__global__ void embed_over_kernel(const uint16_t* __restrict__ rows, const int* __restrict__ at, int dim, int hc, float* h) {
+    const uint16_t* r = rows + (size_t) blockIdx.x * dim;
+    float* o = h + (size_t) at[blockIdx.x] * hc * dim;
+    for (int i = threadIdx.x; i < dim; i += blockDim.x) {
+        const float v = __uint_as_float((uint32_t) r[i] << 16);
+        for (int j = 0; j < hc; ++j) o[(size_t) j * dim + i] = v;
+    }
+}
+
 __global__ void embed_q8_kernel(const uint8_t* __restrict__ table, const int* __restrict__ tok, int dim, int hc,
                                 float* __restrict__ h) {
     const int t = blockIdx.x;
@@ -118,7 +127,8 @@ __global__ void __launch_bounds__(256) bmv_q8_kernel(const uint8_t* __restrict__
 }
 
 // grid heads, hd threads: thread c is channel c of its head, the window in order
-__global__ void kda_conv_kernel(float* x, const float* __restrict__ conv, float* state, int T, int d_inner, int l2) {
+__global__ void kda_conv_kernel(float* x, const float* __restrict__ conv, float* state, int T, int d_inner, int l2, float* snap,
+                                size_t snap_stride) {
     const int c = blockIdx.x * blockDim.x + threadIdx.x;
     const float w0 = conv[(size_t) c * 4], w1 = conv[(size_t) c * 4 + 1], w2 = conv[(size_t) c * 4 + 2],
                 w3 = conv[(size_t) c * 4 + 3];
@@ -132,6 +142,12 @@ __global__ void kda_conv_kernel(float* x, const float* __restrict__ conv, float*
         s0 = s1;
         s1 = s2;
         s2 = in;
+        if (snap != nullptr && t + 1 < T) {
+            float* o = snap + (size_t) t * snap_stride;
+            o[c] = s0;
+            o[(size_t) d_inner + c] = s1;
+            o[(size_t) 2 * d_inner + c] = s2;
+        }
     }
     state[c] = s0;
     state[(size_t) d_inner + c] = s1;
@@ -145,7 +161,7 @@ __global__ void __launch_bounds__(64) kda_scan_kernel(const float* __restrict__ 
                                                       const float* __restrict__ v, const float* __restrict__ graw,
                                                       const float* __restrict__ beta_raw, const float* __restrict__ a,
                                                       const float* __restrict__ dt, float lb, float* S, int T, int heads,
-                                                      float* __restrict__ out) {
+                                                      float* __restrict__ out, float* __restrict__ snap) {
     __shared__ float sk[HD], sq[HD], sg[HD];
     const int h = blockIdx.x, j = blockIdx.y * 64 + threadIdx.x;
     const size_t di = (size_t) heads * HD;
@@ -180,9 +196,72 @@ __global__ void __launch_bounds__(64) kda_scan_kernel(const float* __restrict__ 
             o = fmaf(st[i], sq[i], o);
         }
         out[base + j] = o * scale;
+        if (snap != nullptr && t + 1 < T) {   // (a verify window: what a rejected row goes back to)
+            float* sc = snap + (size_t) t * heads * HD * HD + (size_t) h * HD * HD + j;
+#pragma unroll
+            for (int i = 0; i < HD; ++i) sc[(size_t) i * HD] = st[i];
+        }
     }
 #pragma unroll
     for (int i = 0; i < HD; ++i) col[(size_t) i * HD] = st[i];
+}
+
+// grid T, 256 threads
+__global__ void mtp_in_kernel(const float* __restrict__ e, const float* __restrict__ h, int ring, int first, int zero_first,
+                              const float* __restrict__ enorm, const float* __restrict__ hnorm, int dim, float eps,
+                              float* __restrict__ x) {
+    const int t = blockIdx.x;
+    const float* er = e + (size_t) t * dim;
+    const float* hr = h + (size_t) ((first + t) % ring) * dim;
+    const bool none = zero_first != 0 && t == 0;
+    float se = 0.0f, sh = 0.0f;
+    for (int i = threadIdx.x; i < dim; i += blockDim.x) {
+        se += er[i] * er[i];
+        if (!none) sh += hr[i] * hr[i];
+    }
+    se = block_sum(se);
+    sh = block_sum(sh);
+    const float ie = rsqrtf(se / dim + eps), ih = rsqrtf(sh / dim + eps);
+    float* o = x + (size_t) t * 2 * dim;
+    for (int i = threadIdx.x; i < dim; i += blockDim.x) {
+        o[i] = er[i] * ie * enorm[i];
+        o[dim + i] = none ? 0.0f : hr[i] * ih * hnorm[i];
+    }
+}
+
+// one block of 1024
+__global__ void argmax_conf_kernel(const float* __restrict__ l, int n, int* tok, float* conf) {
+    __shared__ float sv[1024];
+    __shared__ int si[1024];
+    float best = -FLT_MAX;
+    int bi = 0;
+    for (int i = threadIdx.x; i < n; i += blockDim.x)
+        if (l[i] > best) {
+            best = l[i];
+            bi = i;
+        }
+    sv[threadIdx.x] = best;
+    si[threadIdx.x] = bi;
+    __syncthreads();
+    for (int o = 512; o > 0; o >>= 1) {
+        if ((int) threadIdx.x < o) {
+            const float v = sv[threadIdx.x + o];
+            const int i = si[threadIdx.x + o];
+            if (v > sv[threadIdx.x] || (v == sv[threadIdx.x] && i < si[threadIdx.x])) {
+                sv[threadIdx.x] = v;
+                si[threadIdx.x] = i;
+            }
+        }
+        __syncthreads();
+    }
+    const float m = sv[0];
+    float sum = 0.0f;
+    for (int i = threadIdx.x; i < n; i += blockDim.x) sum += expf(l[i] - m);
+    sum = block_sum(sum);
+    if (threadIdx.x == 0) {
+        *tok = si[0];
+        *conf = 1.0f / sum;
+    }
 }
 
 // grid (heads, T), hd threads
@@ -384,6 +463,9 @@ void fill_mean_pre(float* pre, int T, int hc, cudaStream_t s) {
 void embed_q8(const uint8_t* table, const int* tok, int T, int dim, int hc, float* h, cudaStream_t s) {
     embed_q8_kernel<<<T, 256, 0, s>>>(table, tok, dim, hc, h);
 }
+void embed_over(const uint16_t* rows, const int* at, int n, int dim, int hc, float* h, cudaStream_t s) {
+    if (n > 0) embed_over_kernel<<<n, 256, 0, s>>>(rows, at, dim, hc, h);
+}
 void rms_rows(const float* x, const float* w, int n, int rows, size_t stride, float eps, float* y, cudaStream_t s) {
     rms_kernel<<<rows, 256, 0, s>>>(x, w, n, stride, eps, y);
 }
@@ -392,13 +474,21 @@ void bmv_q8(const uint8_t* W, const float* x, size_t x_stride, int heads, int ro
     bmv_q8_kernel<<<dim3((unsigned) ((rows + 7) / 8), (unsigned) heads), 256, (size_t) T * k * 4, s>>>(W, x, x_stride, rows, k,
                                                                                                        T, y, y_stride);
 }
-void kda_conv(float* x, const float* conv, float* state, int T, int heads, int hd, bool l2, cudaStream_t s) {
-    kda_conv_kernel<<<heads, hd, 0, s>>>(x, conv, state, T, heads * hd, l2 ? 1 : 0);
+void kda_conv(float* x, const float* conv, float* state, int T, int heads, int hd, bool l2, cudaStream_t s, float* snap,
+              size_t snap_stride) {
+    kda_conv_kernel<<<heads, hd, 0, s>>>(x, conv, state, T, heads * hd, l2 ? 1 : 0, snap, snap_stride);
+}
+void mtp_in(const float* e, const float* h, int ring, int first, bool zero_first, const float* enorm, const float* hnorm,
+            int dim, int T, float eps, float* x, cudaStream_t s) {
+    mtp_in_kernel<<<T, 256, 0, s>>>(e, h, ring, first, zero_first ? 1 : 0, enorm, hnorm, dim, eps, x);
+}
+void argmax_conf(const float* logits, int n, int* tok, float* conf, cudaStream_t s) {
+    argmax_conf_kernel<<<1, 1024, 0, s>>>(logits, n, tok, conf);
 }
 void kda_scan(const float* q, const float* k, const float* v, const float* graw, const float* beta_raw, const float* a,
-              const float* dt, float lower_bound, float* S, int T, int heads, int hd, float* out, cudaStream_t s) {
+              const float* dt, float lower_bound, float* S, int T, int heads, int hd, float* out, cudaStream_t s, float* snap) {
     (void) hd;   // (128, the only head size: the state column lives in registers)
-    kda_scan_kernel<128><<<dim3((unsigned) heads, 2), 64, 0, s>>>(q, k, v, graw, beta_raw, a, dt, lower_bound, S, T, heads, out);
+    kda_scan_kernel<128><<<dim3((unsigned) heads, 2), 64, 0, s>>>(q, k, v, graw, beta_raw, a, dt, lower_bound, S, T, heads, out, snap);
 }
 void kda_out_norm(float* o, const float* g2, const float* norm, int T, int heads, int hd, float eps, cudaStream_t s) {
     kda_out_kernel<<<dim3((unsigned) heads, (unsigned) T), hd, 0, s>>>(o, g2, norm, heads, hd, eps);

@@ -15,20 +15,32 @@ namespace strata::ds4::glm5 {
 void fill_mean_pre(float* pre, int T, int hc, cudaStream_t s);
 /// The window's token rows from a Q8_0 embedding table into the hc streams, in F32: h[t][j][:] = row(tok[t]).
 void embed_q8(const uint8_t* table, const int* tok, int T, int dim, int hc, float* h, cudaStream_t s);
+/// A picture's rows over the window's: n rows of BF16 `rows`, row i into h[at[i]]'s hc streams.
+void embed_over(const uint16_t* rows, const int* at, int n, int dim, int hc, float* h, cudaStream_t s);
 /// y[r] = x[r] / rms(x[r]) * w over n values, rows apart by stride.  y may be x.
 void rms_rows(const float* x, const float* w, int n, int rows, size_t stride, float eps, float* y, cudaStream_t s);
 /// A batched Q8_0 matrix: y[t][h][r] = sum_c W[h][r][c] x[t][h][c] (W [heads][rows][k], x rows x_stride apart).
 void bmv_q8(const uint8_t* W, const float* x, size_t x_stride, int heads, int rows, int k, int T, float* y,
             size_t y_stride, cudaStream_t s);
 
+// ---- the multi-token head (block 45)
+/// x[t] = [rms(e[t]) * enorm | rms(h) * hnorm], row t's h at h + ((first + t) % ring) * dim; zero_first: row 0 has no h (position 0).
+void mtp_in(const float* e, const float* h, int ring, int first, bool zero_first, const float* enorm, const float* hnorm,
+            int dim, int T, float eps, float* x, cudaStream_t s);
+/// The largest logit's id and its probability.
+void argmax_conf(const float* logits, int n, int* tok, float* conf, cudaStream_t s);
+
 // ---- KDA
 /// One of q, k, v through its causal depthwise conv and SiLU, in place, over a window: x [T][d_inner], conv [d_inner][4]
 /// (tap 3 the current token), state [3][d_inner] (the last inputs, oldest first).  l2: per-head l2 norm (q and k).
-void kda_conv(float* x, const float* conv, float* state, int T, int heads, int hd, bool l2, cudaStream_t s);
+/// snap (a verify window): the state after each row but the last at snap + t * snap_stride, 3 groups of heads * hd.
+void kda_conv(float* x, const float* conv, float* state, int T, int heads, int hd, bool l2, cudaStream_t s,
+              float* snap = nullptr, size_t snap_stride = 0);
 /// The recurrence over a window.  q, k, v, graw [T][heads * hd]; beta_raw [T][heads]; a [heads] (= -exp(A_log));
 /// dt [heads * hd]; S [heads][hd (key i)][hd (value j)] F32, updated; out [T][heads * hd].
 void kda_scan(const float* q, const float* k, const float* v, const float* graw, const float* beta_raw, const float* a,
-              const float* dt, float lower_bound, float* S, int T, int heads, int hd, float* out, cudaStream_t s);
+              const float* dt, float lower_bound, float* S, int T, int heads, int hd, float* out, cudaStream_t s,
+              float* snap = nullptr);
 /// o[t][h][:] = rms(o[t][h][:]) * norm * sigmoid(g2[t][h][:]), in place.
 void kda_out_norm(float* o, const float* g2, const float* norm, int T, int heads, int hd, float eps, cudaStream_t s);
 

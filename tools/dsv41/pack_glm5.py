@@ -28,6 +28,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from pack_gguf import TYPES, Gguf, short, write_tokenizer  # noqa: E402
 
 ARCH = "glm5-next"
+MAX_IMAGE_TOKENS = 4096
 
 # GGUF name (blk.N. stripped) -> the pack's name under layers.N.
 COMMON = {
@@ -208,6 +209,56 @@ def collect(gs: list, kv: dict):
     return tensors, [g.path.name for g in gs]
 
 
+def vision(model: pathlib.Path, path, tokens: list, files: list):
+    """The mmproj's tensors under vision.<their names> and its keys, (tensors, keys); nothing when the folder has none.
+    BF16 first: the checkpoint's own format (F16 clips what it cannot hold)."""
+    if path:
+        mm = pathlib.Path(path).expanduser().resolve()
+    else:
+        found = sorted(model.glob("mmproj*.gguf"), key=lambda p: (0 if "BF16" in p.name else 1, p.name))
+        if not found:
+            return [], {}
+        mm = found[0]
+    if mm.parent != model:
+        raise SystemExit("%s: the mmproj must be in the model's folder" % mm)
+    g = Gguf(mm)
+    if g.kv.get("clip.projector_type") != "glm5v":
+        raise SystemExit("%s: projector %r, not glm5v" % (mm.name, g.kv.get("clip.projector_type")))
+    why = short(g)
+    if why:
+        raise SystemExit("not whole: %s" % why)
+    if "<|image|>" not in tokens:
+        raise SystemExit("the vocabulary has no <|image|> token")
+    fi = len(files)
+    files.append(mm.name)
+    out = []
+    ff = None
+    for name, typ, dims, off in g.tensors:
+        if typ not in TYPES:
+            raise SystemExit("%s: %s has ggml type %d, which the engine does not read" % (mm.name, name, typ))
+        tname, per, bpb = TYPES[typ]
+        nel = 1
+        for d in dims:
+            nel *= d
+        out.append(("vision." + name, tname, fi, g.data_start + off, nel // per * bpb, list(reversed(dims))))
+        if name == "mm.gate.weight":
+            ff = dims[1]
+    k = lambda n, d=None: g.kv.get("clip.vision." + n, d)  # noqa: E731
+    merge = int(k("spatial_merge_size", 2))
+    keys = {"vision.num_hidden_layers": k("block_count"), "vision.hidden_size": k("embedding_length"),
+            "vision.num_attention_heads": k("attention.head_count"), "vision.intermediate_size": k("feed_forward_length"),
+            "vision.patch_size": k("patch_size"), "vision.downsample_ratio": merge, "vision.rope_theta": 10000,
+            "vision.projector_ff": ff, "vision.eps": k("attention.layer_norm_epsilon"), "vision.swiglu_clamp": k("swiglu_clamp", 10.0),
+            "vision.min_pixels": k("image_min_pixels"), "vision.max_pixels": k("image_max_pixels"),
+            # (the model takes 8000 tokens a picture; the tower's work buffers are sized for this many, 1.8K x 1.8K pixels)
+            "vision.max_image_tokens": MAX_IMAGE_TOKENS, "image_token_id": tokens.index("<|image|>")}
+    for i in range(3):
+        keys["vision.image_mean.%d" % i] = k("image_mean")[i]
+        keys["vision.image_std.%d" % i] = k("image_std")[i]
+    print("vision tower from %s: %d blocks, image token %d" % (mm.name, keys["vision.num_hidden_layers"], keys["image_token_id"]))
+    return out, keys
+
+
 def check(tensors: list, geo: dict):
     """Every role of every layer is there, once: a pack with a hole must stop here, not at load."""
     names = [t[0] for t in tensors]
@@ -234,6 +285,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", required=True, help="the folder of the GGUF's shards")
     ap.add_argument("--out", help="the pack's folder (default <model>/strata-glm5)")
+    ap.add_argument("--mmproj", help="the vision tower's GGUF in the model's folder (default: its mmproj*.gguf, BF16 first)")
     a = ap.parse_args()
     model = pathlib.Path(a.model).expanduser().resolve()
     paths = sorted(model.glob("*.gguf"))
@@ -261,6 +313,9 @@ def main() -> int:
     kda_heads = wq[5][0] // int(kv["%s.kda.head_dim" % ARCH])
     geo = geometry(kv, vocab, kda_heads)
     check(tensors, geo)
+    vt, vkeys = vision(model, a.mmproj, list(kv.get("tokenizer.ggml.tokens", [])), files)
+    tensors += vt
+    geo.update(vkeys)
 
     out = pathlib.Path(a.out).expanduser().resolve() if a.out else model / "strata-glm5"
     out.mkdir(parents=True, exist_ok=True)
