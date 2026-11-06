@@ -5713,7 +5713,7 @@ class Service:
             # (an encoder restart, the cache's eviction) with other bits still matches its checkpoints
             self.embeddings.keys = [Path(p).stem[:16] for p, _ in encoded]
             write_temporary(combined, [p for p, _ in encoded])
-        if self.family == "deepseek41" and req is not None and req.get("strata_prefix") is None and not images and not ds_pics:
+        if self.family in ("deepseek41", "glm5-next") and req is not None and req.get("strata_prefix") is None and not images and not ds_pics:
             lead = self.deepseek_shared_start(messages)
             if lead:
                 req["strata_prefix"] = {"messages": lead}
@@ -5733,7 +5733,7 @@ class Service:
                 except Exception:
                     return None
                 return int(t[0]) if len(t) == 1 else None
-            got = self._ds_turn_ids = (one("<｜User｜>"), one("<｜System｜>"))
+            got = self._ds_turn_ids = (one("<|user|>"), one("<|system|>")) if self.family == "glm5-next" else (one("<｜User｜>"), one("<｜System｜>"))
         return got
 
     def set_restore_points(self, req: dict, ids, has_images: bool) -> None:
@@ -5741,7 +5741,7 @@ class Service:
         (never a client's own; not with pictures, whose spans the engine reads whole).  The shared start is left to
         strata_prefix (pin=N) where the request has one."""
         req.pop("_restore", None)
-        if self.family != "deepseek41" or has_images:
+        if self.family not in ("deepseek41", "glm5-next") or has_images:
             return
         on, tail = restore_point_settings()
         if not on:
