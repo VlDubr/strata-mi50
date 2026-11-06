@@ -7,17 +7,21 @@ GLM-5.3-Flash (GGUF architecture `glm5-next`, 320B total parameters, 288 experts
 
 Validated on 4x MI50 32 GB, 91 GB RAM, ROCm 10, with `unsloth/GLM-5.3-Flash` UD-Q4_K_XL (199.7 GB).
 
-| Measure | llama.cpp b11786 | Strata |
-|---|---|---|
-| Decode, short prompt | 10.8 tok/s | 21.5 tok/s |
-| Decode after a 16.7K-token prompt | not measured | 18.5 tok/s |
-| Prefill, 2647 tokens of documentation | 74 tok/s | 145 tok/s |
-| Prefill, 16.7K and 27.9K tokens of C++ | not measured | 99 and 108 tok/s |
-| Load | about 14 min | about 2 min |
+The deployed configuration: context 131072, four conversations, the multi-token head and the vision tower.
 
-The 145 tok/s was measured with a profile of documents and code alone. The deployed profile mixes in chat, so a document prompt
-may read somewhat slower. A fact at the start of a 27.9K-token prompt was found correctly. A prompt that ends differently goes back
-to a restore point: a 16.7K-token prompt took 9 s instead of 168 s.
+| Measure | llama.cpp b11786 | Strata, deployed | Strata, without head, tower and seats |
+|---|---|---|---|
+| Decode, one conversation, sampled at the model card's settings | 10.8 tok/s | 23-26 tok/s | 20.5-21.5 tok/s |
+| Decode, four conversations at once | not measured | 28 tok/s in all | - |
+| Prefill, 14K tokens of C++ | not measured | 78 tok/s | not measured |
+| Prefill, 2647 tokens of documentation | 74 tok/s | not measured | 145 tok/s |
+| Prefill, 16.7K and 27.9K tokens of C++ | not measured | not measured | 99 and 108 tok/s |
+| Load | about 14 min | about 2 min | about 2 min |
+
+The four conversations, the head and the tower take VRAM from the experts: 5164 experts on the CPU lane instead of about 4100.
+That is what slows prefill. With two conversations the 14K prompt reads at 84 tok/s, and chat decode does not change.
+The 145 tok/s was measured with a profile of documents and code alone. A fact at the start of a 27.9K-token prompt was found
+correctly. A prompt that ends differently goes back to a restore point: a 14K-token prompt took 10 s instead of 179 s.
 
 Numerics against llama.cpp on the same weights, greedy:
 
@@ -30,15 +34,12 @@ The server's token ids and rendered chat template match llama.cpp on all referen
 
 ## What is not implemented
 
-- **MTP (block 45, `nextn.*`):** packed, not loaded. Decode reads about 9 GB of dense weights and 5 GB of experts a token.
-  One draft would share the dense read, but it doubles the experts and the CPU lane, and it needs rollback of the KDA state.
-  The estimated gain is below 1.3x, so it was left out.
-- **Vision:** `mmproj-BF16.gguf` is not used. Pictures are refused.
-- **Parallel conversations:** one at a time (`o.seqs = 1`).
-- **Conversation slots:** a conversation that leaves the model is read again from its first token. Restore points inside a
-  conversation work, and they include the KDA state.
+- **Drafts beside other answers:** the multi-token head drafts only while one conversation is answering. With two or more,
+  each takes a plain step in a shared window.
+- **Conversation slots:** the model holds four conversations. A fifth takes the seat used longest ago, and the conversation that
+  leaves is read again from its first token. Restore points inside a conversation work, and they include the KDA state.
+- **Video and audio:** the template has their markers, the engine does not read them.
 - **Tensor parallel, the DeepSeek chunk path, the async router:** GLM uses its own path, below.
-- **Thinking off:** the template always opens `<think>`. A request with reasoning off gets "Reasoning Effort: Low".
 
 ## Design
 
@@ -51,6 +52,37 @@ It reuses the mHC kernels, top-k, GGUF GEMV, the expert tiers, the CPU lane, the
   host-routed path of `layer()`.
 - `Impl::glm5_chunks` reads prompts: a thread a GPU, chunks of 256 rows, attention in windows of 16, experts once a chunk.
 - `serve/glm5.py` translates the model's tool calls to the Qwen form that `OutputParser` reads.
+- `src/dsv41/glm5_vision.cu` is the picture tower. `serve/ds_pictures.py` (`Glm5Pictures`) sizes pictures as llama.cpp does for
+  `glm5v` and sends them through the `GENI` line, as DeepSeek's.
+
+Multi-token head (`--dspark on`, block 45 as `L[g.nl]`, on the head's GPU):
+
+- Row p of its caches is the trunk's final hidden row of p - 1 with token p. A prompt's rows write only those caches, because
+  nothing later reads their attention or experts. The token just picked goes through the whole block and the shared head.
+- A verify window keeps the KDA state and the conv state after each row but the last (`k_bak`, `k_cbak`). A rejected draft
+  copies them back. The MLA caches are by position, so the next window overwrites a rejected row, and a pool it completed.
+- A draft is verified when the head's probability is at least `--dspark-conf` (0.5). `--dspark-block N` chains up to 3 drafts,
+  but 2 gave no gain: 25.9 tok/s against 25.8.
+- `--dspark off` keeps the block loaded and unused. Use it to compare tokens: the greedy tokens were the same 128 of 128 with the
+  drafts on, on the same expert placement. `--dspark none` frees its VRAM, which moves experts between the GPU and the CPU lane,
+  and their rounding differs, so its tokens are not comparable.
+- 84-93% of the drafts were kept on code, Russian and English prose at temperature 1.0.
+
+Parallel conversations (`--parallel N`): each conversation has its own KDA state, MLA caches and hidden rows, about 2.7 GB at
+131072 tokens. A multi step runs dense weights and experts once for its rows and the per-conversation kernels a run at a time.
+Three conversations together gave the same logits bit for bit as each alone. A long prompt reads 1024 rows at a time, then every
+answer writes 64 tokens, so an answer stops for about 20 s at most (`STRATA_DS4_READ_PIECES=0` reads it whole, `STRATA_DS4_READ_ROUNDS`
+sets the tokens). A prompt with pictures is read whole.
+
+Thinking off (`reasoning_effort: none`, `enable_thinking: false`, Anthropic `thinking: disabled`): the template has no switch and
+always opens `<think>`, so the server appends `</think>`, as the template writes the past turns, with "Reasoning Effort: Low".
+
+Pictures: the tower's weights stay in pinned host memory as F16 and go to the GPU for each picture, so it costs the card 674 MiB of
+work buffers. Its rows replace the `<|image|>` tokens; the model's attention has no positions, so nothing else changes. At most
+4096 tokens a picture (the model takes 8000; the buffers are sized for this). 48 tokens take 90 ms. Against a numpy reference after
+llama.cpp's graph, blocks 0-1 agree to five digits. The final rows have a mean cosine of 0.997 and a worst row of 0.96: the error
+grows in a few rows with very large activations, more than F16 rounding alone gives in numpy (0.9999 and 0.998). The model runs
+its tower in BF16, which is coarser. Use `mmproj-BF16.gguf`: the file is the checkpoint's format, and the pack prefers it.
 
 Differences from DeepSeek-V4.1 that are easy to miss:
 
@@ -70,11 +102,12 @@ ninja -C build-glm5 strata-dsv41 glm5_kernels_test ds4_gguf_test ds4_iq_test ds4
 ```
 
 The main `strata` engine keeps its `STRATA_HIP_GFX906` build. `strata-dsv41` uses the wave64 `STRATA_ENABLE_HIP` backend.
+`Dockerfile.glm5` builds both from the same tree.
 Image: `docker build -t strata-gfx906:0.2.10-mi50-glm5 -f deploy/mi50/Dockerfile.glm5 .`
 
 ## Deployment
 
-1. Pack, with the paths the container sees:
+1. Pack, with the paths the container sees. It takes the `mmproj*.gguf` in the model's folder, BF16 first:
    `python tools/dsv41/pack_glm5.py --model /data/models/GLM-5.3-Flash-UD-Q4_K_XL/UD-Q4_K_XL --out /data/packs/glm5-flash`
 2. Put the expert profile at `/data/packs/glm5-flash/expert-profile.bin`. Without one the experts are placed in index order,
    and the CPU lane takes 33% of the picks instead of about 21%. The deployed profile is two runs, each layer's counts as
@@ -84,8 +117,8 @@ Image: `docker build -t strata-gfx906:0.2.10-mi50-glm5 -f deploy/mi50/Dockerfile
 
 ```json
 {"exe": "/opt/strata/engine/strata-dsv41",
- "args": ["--pack", "/data/packs/glm5-flash", "--max-context", "131072", "--eos", "154820,154827,154829", "--dspark", "none",
-          "--vision", "off", "--tp", "1", "--threads", "off", "--prefill-chunk", "0",
+ "args": ["--pack", "/data/packs/glm5-flash", "--max-context", "131072", "--eos", "154820,154827,154829", "--dspark", "on",
+          "--parallel", "4", "--tp", "1", "--threads", "off", "--prefill-chunk", "0",
           "--expert-profile", "/data/packs/glm5-flash/expert-profile.bin", "--profile-readonly", "--no-expert-cache", "--ssd-cache", "0"],
  "cwd": "/opt/strata", "tokenizer": "/data/packs/glm5-flash/tokenizer", "model_name": "glm-5.3-flash",
  "arch": "deepseek41", "family": "glm5-next", "log": "/data/logs/strata-glm5.log", "lib_dirs": ["/opt/rocm/lib"], "port": 8080,
@@ -101,17 +134,20 @@ Settings measured on this machine:
 
 - `--no-expert-cache --ssd-cache 0`: 18 tok/s after a 2647-token prompt. The defaults copy the CPU lane's experts into RAM and
   swap them: 15 tok/s.
-- The model needs about 65 GB of RAM for the page cache of the CPU lane's experts. Other large workloads slow decode.
+- The model needs about 79 GB of RAM for the page cache of the CPU lane's experts with four conversations, 74 GB with two. This
+  machine has 91 GB. Other large workloads slow decode. `--parallel 2` or a smaller `--max-context` gives some of it back.
 
 ## Tests
 
 - `tests/test_glm5_pack.py`: the pack's name map and checks. No model.
-- `serve/test_glm5.py`: tool-call translation and parsing. No model.
-- `glm5_kernels_test`: the device kernels against double-precision references. Needs a GPU, no model.
+- `serve/test_glm5.py`: tool-call translation and parsing, the thinking switch, picture sizes. No model.
+- `glm5_kernels_test`: the device kernels against double-precision references, and the KDA snapshots. Needs a GPU, no model.
+- `strata-dsv41 --parallel 3 --multi-check --ids ... --n 32`: conversations together against each alone. Needs the model.
 - `ds4_gguf_test`, `ds4_iq_test`, `ds4_tq_test`, `ds4_route_guard_test` pass on an MI50 with the wave64 build.
 
 ## Where the decode time goes
 
-A decode step takes about 54 ms: about 33 ms of waits for the GPUs, 16 ms in the CPU lane, the rest host launches.
+A plain decode step takes about 54 ms: about 33 ms of waits for the GPUs, 16 ms in the CPU lane, the rest host launches.
 Only one GPU works at a time on a single conversation (layer split). The dense weights alone take about 12 ms at the
-MI50's memory rate. Next steps, by expected gain: tensor parallel for the dense layers, the async router.
+MI50's memory rate. A verify window reads the dense weights once, but its rows double the CPU lane's experts, which is why two
+tokens a round give 1.25x and not more. Next steps, by expected gain: tensor parallel for the dense layers, the async router.

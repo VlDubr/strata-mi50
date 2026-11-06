@@ -51,8 +51,8 @@ architecture on ROCm 10, adds MI50-specific decode speed-ups that keep the outpu
 - **Current with upstream.** Upstream releases are merged through v0.2.10. Every conflict, check and measurement is
   recorded in [docs/GFX906.md](docs/GFX906.md).
 - **Ready to deploy.** Dockerfile, launcher and a GPU clock service in [deploy/mi50/](deploy/mi50/).
-- **GLM-5.3-Flash too.** The 320B model runs on 4x MI50 at 18-21 tok/s decode and 100-145 tok/s prefill, about twice llama.cpp on
-  the same cards. Design, deployment and limits: [docs/GLM5.md](docs/GLM5.md).
+- **GLM-5.3-Flash too.** The 320B model runs on 4x MI50 at 23-26 tok/s decode with its multi-token head, more than twice llama.cpp
+  on the same cards, with pictures and four conversations at once. Design, deployment and limits: [docs/GLM5.md](docs/GLM5.md).
 
 ## Performance
 
