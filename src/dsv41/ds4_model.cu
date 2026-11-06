@@ -7525,6 +7525,7 @@ struct Model::Impl {
             cudaStreamSynchronize(d.st);
         }
         pos = c.pos;
+        mtp_fill = std::min<int64_t>(mtp_fill, pos);
         toks.resize((size_t) pos);
         ctoks.resize((size_t) pos);
         slot_held = false;
@@ -15862,6 +15863,7 @@ bool Model::step_multi_spec(const int* seqs, const int* const* toks, const int* 
 }
 bool Model::can_draft_multi(const int* seqs, int n) const { return p_->can_draft_multi(seqs, n); }
 bool Model::spec_together() const { return !p_->g.glm5; }
+int Model::read_piece_rows() const { return p_->g.glm5 ? Impl::kGlmChunk : 0; }
 bool Model::draft_multi(const int* seqs, const int* ys, int n, std::vector<std::vector<int>>& d,
                         std::vector<std::vector<float>>& c, std::string& err) {
     return p_->draft_multi(seqs, ys, n, d, c, err);

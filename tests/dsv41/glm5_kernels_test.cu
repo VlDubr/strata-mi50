@@ -118,6 +118,28 @@ static void test_kda() {
     }
     check("kda conv q", down(dq, (size_t) T * DI), qkv[0], 2e-5);
     check("kda scan", down(dout, (size_t) T * DI), want, 5e-5);
+    // a verify window's snapshots: the state after each row but the last is the state a window that ended there leaves
+    {
+        const size_t ns = (size_t) H * HD * HD, nc = (size_t) 3 * DI;
+        std::vector<float> st0(ns, 0.0f), cv0(nc, 0.0f), x((size_t) 2 * DI), g2((size_t) 2 * DI), b2((size_t) 2 * H);
+        for (size_t i = 0; i < x.size(); ++i) x[i] = g2[i] = 0.01f * (float) ((i * 37) % 101) - 0.5f;
+        for (size_t i = 0; i < b2.size(); ++i) b2[i] = 0.1f * (float) i - 0.3f;
+        auto run = [&](int rows, float* snap, float* csnap, std::vector<float>& st_out, std::vector<float>& cv_out) {
+            float *q = up(x), *k = up(x), *v = up(x), *g = up(g2), *b = up(b2), *S = up(st0), *C = up(cv0), *o = up(x);
+            glm5::kda_conv(q, dc0, C, rows, H, HD, false, 0, csnap, nc);
+            glm5::kda_scan(q, k, v, g, b, da, ddt, lb, S, rows, H, HD, o, 0, snap);
+            cudaDeviceSynchronize();
+            st_out = down(S, ns);
+            cv_out = down(C, nc);
+        };
+        std::vector<float> one_s, one_c, two_s, two_c;
+        float *snap = up(st0), *csnap = up(cv0);
+        run(2, snap, csnap, two_s, two_c);
+        run(1, nullptr, nullptr, one_s, one_c);
+        std::vector<double> ws(one_s.begin(), one_s.end()), wc(one_c.begin(), one_c.end());
+        check("kda snapshot", down(snap, ns), ws, 0.0);
+        check("kda conv snapshot", down(csnap, nc), wc, 0.0);
+    }
 }
 
 static void test_bmv() {

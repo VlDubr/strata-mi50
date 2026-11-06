@@ -221,6 +221,7 @@ public:
     /// together.  can_draft_multi: whether these conversations fit one pass (their blocks in a window, each its
     /// block's room in its context); else each drafts alone with draft().
     bool can_draft_multi(const int* seqs, int n) const;
+    int read_piece_rows() const;   // a prompt's rows a stage in a piece when it reads beside answers (0: it does not by default)
     bool spec_together() const;   // several conversations' rows can be verify windows (GLM-5.3: a conversation alone drafts)
     bool draft_multi(const int* seqs, const int* ys, int n, std::vector<std::vector<int>>& drafts,
                      std::vector<std::vector<float>>& conf, std::string& err);

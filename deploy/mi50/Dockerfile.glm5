@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 #
-# GLM-5.3-Flash on the DeepSeek engine path (strata-dsv41) for MI50 / MI60.  Adds the engine and the GLM server pieces to the
-# Qwen image; docs/GLM5.md has the pack, the config and the numbers.
+# GLM-5.3-Flash on the DeepSeek engine path (strata-dsv41) for MI50 / MI60.  Builds both engines from this tree over the Qwen image
+# (strata for Qwen, strata-dsv41 for GLM), so an image holds one source; docs/GLM5.md has the pack, the config and the numbers.
 #
 # Build from the repository root:
 #   docker build -t strata-gfx906:0.2.10-mi50-glm5 -f deploy/mi50/Dockerfile.glm5 .
@@ -10,6 +10,15 @@ ARG BASE=strata-gfx906:0.2.10-mi50-vision
 FROM ${BASE}
 
 COPY . /tmp/src
+RUN cmake -S /tmp/src -B /tmp/q -G Ninja -DCMAKE_BUILD_TYPE=Release \
+        -DSTRATA_HIP_GFX906=ON -DCMAKE_HIP_ARCHITECTURES=gfx906 \
+        -DSTRATA_PORTABLE=ON -DSTRATA_PREFILL_MMQ=OFF -DSTRATA_BUILD_TESTS=OFF \
+        -DCMAKE_C_COMPILER=/usr/bin/cc -DCMAKE_CXX_COMPILER=/usr/bin/c++ \
+        -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++ -DCMAKE_PREFIX_PATH=/opt/rocm \
+        -DSTRATA_GGML_DIR=/opt/strata/third_party/llama.cpp \
+    && cmake --build /tmp/q -j "$(nproc)" --target strata \
+    && cp /tmp/q/strata /opt/strata/engine/strata \
+    && rm -rf /tmp/q
 RUN cmake -S /tmp/src -B /tmp/b -G Ninja -DCMAKE_BUILD_TYPE=Release \
         -DSTRATA_ENABLE_HIP=ON -DSTRATA_ENABLE_CUDA=OFF -DSTRATA_EXPERIMENTAL_GFX906=ON -DCMAKE_HIP_ARCHITECTURES=gfx906 \
         -DSTRATA_BUILD_TESTS=OFF -DSTRATA_BUILD_DSV41=ON -DSTRATA_NATIVE_EXPERTS=ON -DSTRATA_PORTABLE=ON \

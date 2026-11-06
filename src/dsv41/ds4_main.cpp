@@ -1231,6 +1231,7 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
                 break;
             }
             if (done - start >= piece) break;
+            if (yield_fn && m.prompt_chunk() == 0 && done > start && yield_fn()) break;   // (GLM-5.3: its feeds do not yield inside)
             size_t n = std::min<size_t>({(size_t) m.feed_unit(), total - done, piece - (done - start)});
             if (next_cut < cuts.size() && (size_t) cuts[next_cut].pos < done + n) n = (size_t) cuts[next_cut].pos - done;
             // (the rest of the prompt in one read that keeps the restore points left on the way, where that costs at most
@@ -1534,11 +1535,16 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
             const int x = v != nullptr ? std::atoi(v) : 0;
             return x > 0 ? x : dflt;
         };
-        const bool read_pieces = env_count("STRATA_DS4_READ_PIECES", 0) > 0 && m.prompt_chunk() > 0;
-        const size_t read_piece = m.prompt_chunk() > 0 ? (size_t) m.prompt_chunk() * (size_t) m.pipeline_stages() *
-                                                             (size_t) env_count("STRATA_DS4_READ_PIECE", 1)
-                                                       : (size_t) m.feed_unit();
-        const int read_rounds = env_count("STRATA_DS4_READ_ROUNDS", 1);
+        // (GLM-5.3 reads in pieces by default: a chunk a stage, about 20 s, then 64 tokens of every answer, about 3 s; a prompt that
+        //  took the model whole held the answers for minutes)
+        const int glm_piece = m.read_piece_rows();
+        const bool read_pieces = glm_piece > 0 ? (std::getenv("STRATA_DS4_READ_PIECES") == nullptr || env_count("STRATA_DS4_READ_PIECES", 0) > 0)
+                                               : env_count("STRATA_DS4_READ_PIECES", 0) > 0 && m.prompt_chunk() > 0;
+        const size_t read_piece = glm_piece > 0 ? (size_t) glm_piece * (size_t) m.pipeline_stages() * (size_t) env_count("STRATA_DS4_READ_PIECE", 1)
+                                  : m.prompt_chunk() > 0 ? (size_t) m.prompt_chunk() * (size_t) m.pipeline_stages() *
+                                                               (size_t) env_count("STRATA_DS4_READ_PIECE", 1)
+                                                         : (size_t) m.feed_unit();
+        const int read_rounds = env_count("STRATA_DS4_READ_ROUNDS", glm_piece > 0 ? 64 : 1);
         // the reader's lines posted and taken: one waiting, a prompt read alone yields to it
         std::atomic<long long> lines_posted{0};
         long long lines_taken = 0;

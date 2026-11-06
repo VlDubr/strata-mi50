@@ -2,6 +2,7 @@
 block 45 under nextn.*, and the checks that stop a pack with a hole.  No model file."""
 import pathlib
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools" / "dsv41"))
@@ -105,6 +106,10 @@ class Pack(unittest.TestCase):
         self.assertIn("nextn.eh_proj.weight", self.names)
         self.assertIn("nextn.ffn.experts.1.w2.weight", self.names)
         self.assertFalse(any(n.startswith("layers.4.") for n in self.names))
+
+    def test_no_mmproj_no_tower(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(P.vision(pathlib.Path(d), None, ["<|image|>"], []), ([], {}))
 
     def test_check_passes_a_whole_pack(self):
         P.check(self.tensors, self.geo)
