@@ -501,7 +501,7 @@ bool attn_v3_on() {
 // 16-lane row, v_permlanex16 across the two rows - instead of ds_bpermute; the same value moves, so every sum is
 // unchanged bit for bit.
 template <bool DPP, int M> __device__ __forceinline__ float shfl_x(float v) {
-#if defined(__HIPCC__)
+#if defined(__HIPCC__) && !defined(__gfx906__)   // (row_xmask and v_permlanex16 are gfx10+; gfx906 takes the shuffle)
     if constexpr (DPP) {
         const int x = __float_as_int(v);
         if constexpr (M == 16) return __int_as_float(__builtin_amdgcn_permlanex16(x, x, 0x76543210, 0xfedcba98, false, false));
