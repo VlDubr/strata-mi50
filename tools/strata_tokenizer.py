@@ -78,6 +78,19 @@ DEEPSEEK3_PATTERNS = (
 )
 
 
+# The `glm4` pre-tokenizer (GLM-4 / GLM-5; llama.cpp LLAMA_VOCAB_PRE_TYPE_CHATGLM4).  llama.cpp also sets ignore_merges for it: a
+# piece that is itself a token is that token, whatever the merges would have made of it.
+GLM4_PATTERN = (
+    r"(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])"
+    r"|[^\r\n\p{L}\p{N}]?\p{L}+"
+    r"|\p{N}{1,3}"
+    r"| ?[^\s\p{L}\p{N}]+[\r\n]*"
+    r"|\s*[\r\n]+"
+    r"|\s+(?!\S)"
+    r"|\s+"
+)
+
+
 def _sequence_findall(patterns, text: str) -> list[str]:
     """llama.cpp's unicode_regex_split: the pieces of `text` after each pattern in turn splits every piece into its
     matches and the unmatched spans between them."""
@@ -119,9 +132,13 @@ class Tokenizer:
             if parts[0] not in self.ids or parts[1] not in self.ids:
                 raise ValueError("merge %d names a token outside the vocabulary: %r" % (i, m))
             self.ranks[(parts[0], parts[1])] = i
+        self.ignore_merges = str(pre) in ("glm4", "glm5")
         if str(pre).startswith("deepseek"):
             seq = [regex.compile(x) for x in DEEPSEEK3_PATTERNS]
             self._split = lambda text: _sequence_findall(seq, text)
+        elif self.ignore_merges:
+            self._re = regex.compile(GLM4_PATTERN)
+            self._split = self._re.findall
         else:
             self._re = regex.compile(QWEN35_PATTERN)
             self._split = self._re.findall
@@ -264,7 +281,7 @@ class Tokenizer:
             if got is None:
                 mapped = "".join(BYTE_TO_UNICODE[b] for b in piece.encode("utf-8"))
                 got = []
-                for tok in self._bpe(mapped):
+                for tok in ([mapped] if self.ignore_merges and mapped in self.ids else self._bpe(mapped)):
                     i = self.ids.get(tok)
                     if i is None:
                         raise KeyError("BPE produced a token outside the vocabulary: %r" % tok)

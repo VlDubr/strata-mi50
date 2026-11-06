@@ -1295,6 +1295,7 @@ struct Model::Impl {
         int64_t pos = -1;
         std::vector<std::vector<uint8_t>> win;
         std::vector<std::vector<float>> comp;
+        std::vector<std::vector<float>> kda;   // (GLM-5.3) a KDA layer's recurrent state, then its conv rows
         bool shared = false;          // (a mark's: the end of a shared start, kept before the others)
         uint64_t used = 0;            // (a mark's: its last use, mark_clock)
     };
@@ -7283,14 +7284,24 @@ struct Model::Impl {
     // the state at pos into checkpoint `slot` (the window rings and the compressors' partial groups: the rest of the
     // state is indexed by position, and what lies past a restored position is written again)
     void checkpoint(int slot) { snap_into(ck[slot & 1]); }
+    size_t glm5_state_floats() const { return (size_t) g.kda_heads * g.kda_hd * g.kda_hd; }
+    size_t glm5_conv_floats() const { return (size_t) 9 * g.kda_heads * g.kda_hd; }
     void snap_into(Check& c) {
         c.pos = pos;
         c.win.resize(L.size());
         c.comp.resize(L.size() * 2);
+        c.kda.resize(L.size());
         for (size_t i = 0; i < L.size(); ++i) {
             Layer& l = L[i];
             Dev& d = devs[(size_t) l.dev];
             cudaSetDevice(d.id);
+            if (l.k_state != nullptr) {
+                const size_t ns = glm5_state_floats(), nc = glm5_conv_floats();
+                c.kda[i].resize(ns + nc);
+                cudaMemcpyAsync(c.kda[i].data(), l.k_state, ns * 4, cudaMemcpyDeviceToHost, d.st);
+                cudaMemcpyAsync(c.kda[i].data() + ns, l.k_conv, nc * 4, cudaMemcpyDeviceToHost, d.st);
+            }
+            if (l.win == nullptr) continue;
             c.win[i].resize((size_t) g.win * win_rb());
             cudaMemcpyAsync(c.win[i].data(), l.win, c.win[i].size(), cudaMemcpyDeviceToHost, d.st);
             if (l.c_kv) {
@@ -7385,7 +7396,10 @@ struct Model::Impl {
     }
     size_t check_bytes() const {
         size_t n = 16;
-        for (const Layer& l : L) n += (size_t) g.win * win_rb() + (l.c_kv ? 2 * (size_t) l.ratio * g.hd * 4 : 0);
+        for (const Layer& l : L) {
+            if (l.k_state != nullptr) n += (glm5_state_floats() + glm5_conv_floats()) * 4;
+            if (l.win != nullptr) n += (size_t) g.win * win_rb() + (l.c_kv ? 2 * (size_t) l.ratio * g.hd * 4 : 0);
+        }
         return n;
     }
 
@@ -7398,6 +7412,12 @@ struct Model::Impl {
                 Layer& l = member(L[i], m);
                 Dev& d = devs[(size_t) l.dev];
                 cudaSetDevice(d.id);
+                if (l.k_state != nullptr) {
+                    const size_t ns = glm5_state_floats(), nc = glm5_conv_floats();
+                    cudaMemcpyAsync(l.k_state, c.kda[i].data(), ns * 4, cudaMemcpyHostToDevice, d.st);
+                    cudaMemcpyAsync(l.k_conv, c.kda[i].data() + ns, nc * 4, cudaMemcpyHostToDevice, d.st);
+                }
+                if (l.win == nullptr) continue;
                 cudaMemcpyAsync(l.win, c.win[i].data(), c.win[i].size(), cudaMemcpyHostToDevice, d.st);
                 if (l.c_kv) {
                     cudaMemcpyAsync(l.c_kv, c.comp[2 * i].data(), c.comp[2 * i].size() * 4, cudaMemcpyHostToDevice, d.st);
@@ -7448,6 +7468,10 @@ struct Model::Impl {
     // (the rows a position completed never change), the tokens up to it.  The mark stays; the slot holds the checkpoints
     // at or before it.  (A shared start kept from a read that went on past it: #607 without a stop at the start.)
     uint64_t slot_save(std::vector<uint8_t>& out, std::string& err, int64_t at = -1) {
+        if (g.glm5) {   // (not written yet: a conversation that leaves the model is read again)
+            err = "GLM-5.3 keeps no conversation slots";
+            return 0;
+        }
         const Check* at_mark = nullptr;
         if (at >= 0 && at != pos) {
             for (const Check& x : mk)
@@ -7569,6 +7593,10 @@ struct Model::Impl {
     }
 
     bool slot_load(const uint8_t* data, size_t bytes, int64_t n_pos, std::string& err) {
+        if (g.glm5) {
+            err = "GLM-5.3 keeps no conversation slots";
+            return false;
+        }
         size_t off = 0;
         bool wrote = false, ok = false;
         // a load that stops after some of another conversation's state went into the layers leaves a state no

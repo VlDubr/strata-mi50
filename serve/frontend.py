@@ -139,6 +139,10 @@ EFFORT = {"none": None, "off": None, "minimal": None, "disabled": None, "false":
 # Effort: N" line of its prompt).  use_family("deepseek41") switches the table; the other families keep the one above.
 EFFORT_DEEPSEEK = {"none": None, "off": None, "minimal": None, "disabled": None, "false": None,
                    "low": "low", "medium": "medium", "high": "high", "xhigh": "max", "max": "max", "maximum": "max"}
+# GLM-5.3-Flash's template takes low, high and max (its default) and always opens <think>: "none" is its lowest, where the
+# model mostly closes the thinking at once.
+EFFORT_GLM5 = {"none": "low", "off": "low", "minimal": "low", "disabled": "low", "false": "low",
+               "low": "low", "medium": "high", "high": "high", "xhigh": "max", "max": "max", "maximum": "max"}
 _EFFORT_QWEN = dict(EFFORT)
 _NUMERIC_EFFORT = False
 
@@ -147,7 +151,7 @@ def use_family(family: str | None) -> None:
     """The reasoning-effort words of the model family this server runs (module state, like ENV_TO_USER)."""
     global _NUMERIC_EFFORT
     EFFORT.clear()
-    EFFORT.update(EFFORT_DEEPSEEK if family == "deepseek41" else _EFFORT_QWEN)
+    EFFORT.update(EFFORT_DEEPSEEK if family == "deepseek41" else EFFORT_GLM5 if family == "glm5-next" else _EFFORT_QWEN)
     _NUMERIC_EFFORT = family == "deepseek41"
 
 

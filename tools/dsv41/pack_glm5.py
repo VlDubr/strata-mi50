@@ -19,6 +19,7 @@ A KDA layer and an MLA layer both call their output matrix attn_output in the GG
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
 import sys
@@ -277,6 +278,10 @@ def main() -> int:
     if not template:
         raise SystemExit("%s: the GGUF has no tokenizer.chat_template" % model)
     write_tokenizer(out / "tokenizer", kv, template)
+    # (write_tokenizer's own config is DeepSeek's: the pre-tokenizer and every id that ends a reply are this model's)
+    (out / "tokenizer" / "tokenizer.json").write_text(json.dumps(
+        {"pre": kv.get("tokenizer.ggml.pre", "glm4"), "special_ids": {"eos": geo["eos_token_id"], "pad": geo["eos_token_id"]},
+         "eos_ids": geo["eos_token_ids"]}, indent=1))
     by = {}
     for t in tensors:
         by[t[1]] = by.get(t[1], 0) + t[4]

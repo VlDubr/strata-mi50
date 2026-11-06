@@ -4629,6 +4629,13 @@ class Service:
             self.stop_ids = {int(eos)}
             self.parser_cls = dsml.DsmlOutputParser
             self._force_text = dsml.to_dsml_force
+        if family == "glm5-next":
+            from serve import glm5
+            # <|endoftext|>, <|user|> and <|observation|>: the template's turn markers end a reply (generation_config's eos ids)
+            ids = [self.tok.encode(t, parse_special=True) for t in ("<|endoftext|>", "<|user|>", "<|observation|>")]
+            self.stop_ids = {int(t[0]) for t in ids if len(t) == 1}
+            self.parser_cls = glm5.Glm5OutputParser
+            self._force_text = glm5.to_glm_force
         import serve.frontend as _frontend
         _frontend.use_family(family)
 
@@ -9333,7 +9340,7 @@ def check_request_sampling(req) -> None:
 
 # the API's model name per model family (the GGUF architecture, "arch" in the config) when the config names none
 FAMILY_MODEL_NAMES = {"qwen4exp": "qwen3.8-flash-next", "qwen35moe": "qwen3.6-35b-a3b",
-                      "deepseek41": "deepseek-v4.1-flash"}
+                      "deepseek41": "deepseek-v4.1-flash", "glm5-next": "glm-5.3-flash"}
 
 
 # The sampling each model card recommends ("Best Practices"), used when neither the request, the Chat settings nor the
@@ -9348,6 +9355,8 @@ MODEL_CARD_SAMPLING = {
                   "instruct": {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "presence_penalty": 1.5}},
     # DeepSeek-V4.1-Flash: temperature 1.0, top_p 1.0 for local use (thinking or not), no penalties
     "deepseek41": {"thinking": {"temperature": 1.0, "top_p": 1.0}, "instruct": {"temperature": 1.0, "top_p": 1.0}},
+    # GLM-5.3-Flash: generation_config.json's temperature 1.0, top_p 0.95
+    "glm5-next": {"thinking": {"temperature": 1.0, "top_p": 0.95}, "instruct": {"temperature": 1.0, "top_p": 0.95}},
 }
 
 
@@ -9868,7 +9877,7 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
             delay_s=getattr(a, "script_delay", 0.0) or 0.0), None, {}
     # the model's own chat template (exported with its tokenizer), else the original model's
     tpl = tpath / "chat_template.jinja"
-    if (cfg.get("arch") or "") == "deepseek41":
+    if (cfg.get("arch") or "") == "deepseek41" and not cfg.get("family"):
         from serve import dsml
         tpl, swapped = dsml.pick_template(tpl)
         if swapped:
@@ -9890,8 +9899,10 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
     svc.max_queue = max_queue
     svc.queue_timeout_s = float(queue_timeout) if queue_timeout is not None else None
     if a.engine == "strata":                            # the model card's sampling when nothing else is said (see MODEL_CARD_SAMPLING)
-        svc.model_arch = cfg.get("arch") or "qwen4exp"
-        svc.set_family(svc.model_arch if svc.model_arch == "deepseek41" else None)
+        # ("family": a model on the DeepSeek engine path that is not DeepSeek: "arch" stays the engine's, GLM-5.3-Flash's config says
+        #  "arch": "deepseek41", "family": "glm5-next")
+        svc.model_arch = cfg.get("family") or cfg.get("arch") or "qwen4exp"
+        svc.set_family(svc.model_arch if svc.model_arch in ("deepseek41", "glm5-next") else None)
         requested = cfg.get("parallel")
         if requested is None:
             args = cfg.get("args", [])
