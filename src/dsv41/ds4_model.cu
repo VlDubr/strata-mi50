@@ -2919,6 +2919,7 @@ struct Model::Impl {
         }
         if (!o.dspark) g.n_mtp = 0;
         if (g.glm5 && o.dspark_block > 0) g.d_block = std::min(o.dspark_block, kGlmDrafts);
+        if (g.glm5) ahead_mode = 0;   // (its experts are read from RAM, and the guesses cost the chain 80 us a layer)
         if (o.dspark_block > 0 && std::getenv("DS4_DSPARK_MAX") == nullptr) max_drafts = o.dspark_block;   // (--dspark-block N: at most N drafts a round)
         L.resize((size_t) (g.nl + g.n_mtp));
         int last_src = -1;
@@ -13552,7 +13553,8 @@ struct Model::Impl {
         wp.par = par;
         // (a multi step's rows always on the async path, whatever their count: its verify windows reach 16 rows, and the
         //  host-routed path's sums for them were not its own decode's; Project Maya #611)
-        wp.async = !g.glm5 && (par || (!sync_decode && (T <= async_max_t || wp.nrow > 0)));
+        static const bool glm_sync = std::getenv("DS4_GLM_SYNC") != nullptr;   // (GLM-5.3 on the host-routed path)
+        wp.async = !(g.glm5 && glm_sync) && (par || (!sync_decode && (T <= async_max_t || wp.nrow > 0)));
         wp.vl = 0;
         for (int t = 0; t < T && !imgs.empty() && wp.nrow == 0; ++t)
             if (in_image(p0 + t)) wp.vl |= 1u << t;
@@ -13574,7 +13576,7 @@ struct Model::Impl {
                 }
                 for (int t = 0; t < T; ++t) wp.topk[il][t] = cur_topk_n[t];
             }
-            if (wp.async) {
+            if (wp.async && !l.dense) {   // (GLM-5.3: the leading blocks route nothing)
                 wp.seq[il] = ++seq_issued;
                 layer_of[wp.seq[il] % kRing].store(il, std::memory_order_release);
             }
@@ -14985,7 +14987,8 @@ struct Model::Impl {
             // the routing goes to the service thread through the mailbox (a group's lead publishes it, the members
             // make the same plan) while the device runs the shared expert and the VRAM experts (from the plan the
             // router made), and waits for the answer only before the experts' sum
-            gemv_f32(l.gate_w, d.x, l.n_exp, D, T, d.glog, 1024, s);
+            if (g.glm5) gate_f32(l.gate_w, d.x, l.n_exp, D, T, d.glog, 1024, s);
+            else gemv_f32(l.gate_w, d.x, l.n_exp, D, T, d.glog, 1024, s);
             const unsigned sq = wp.seq[l.il];
             const int slot = (int) (sq % kRing);
             const bool lead = mi == 0;
@@ -15002,7 +15005,7 @@ struct Model::Impl {
             }
             route_publish(d.glog, l.gate_bias, l.n_exp, l.k_exp, T, g.route_scale, l.vram_tab, d.x, D, d.ridx, d.rw,
                           d.plan_ptr, lead ? reqs + slot : nullptr, sq, s, l.gate_bias_vl, l.mtp ? 0u : wp.vl, na[0],
-                          na[1]);
+                          na[1], g.glm5 ? 1 : 0);
             if (!mv(d, {job(l.s1, d.x, d.sg, T, D, FF), job(l.s3, d.x, d.su, T, D, FF)}, err)) return false;
             swiglu(d.sg, d.su, T * FF, g.lim, d.sh, s);
             if (!mv(d, {job(l.s2, d.sh, d.sh_out, T, FF, D)}, err)) return false;
@@ -15109,7 +15112,7 @@ struct Model::Impl {
             if (nm > 1) allreduce(d.moe_out, T * D, ag, mi, ++d.ar_seq, d.xcnt, s);
             hc_post(d.moe_out, d.h, d.f_post, d.f_comb, D, H, T, d.h2, s);
             std::swap(d.h, d.h2);
-            CK(cudaMemcpyAsync(d.pre, d.f_pre, (size_t) T * 8 * 4, cudaMemcpyDeviceToDevice, s));
+            if (!g.glm5) CK(cudaMemcpyAsync(d.pre, d.f_pre, (size_t) T * 8 * 4, cudaMemcpyDeviceToDevice, s));
             prof_mark(d, 5);
             return true;
         }

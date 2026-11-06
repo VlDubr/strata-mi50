@@ -1576,6 +1576,15 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
         };
         const auto finish_act = [&](Act& a) {
             const double t2 = now_ms();
+            if (std::getenv("DS4_REQ_STATS") != nullptr) {   // what a request's rounds cost
+                static strata::ds4::Stats p;
+                const strata::ds4::Stats& s = m.stats();
+                const double n = std::max<double>(1.0, (double) a.produced), r = std::max<double>(1.0, (double) (s.drafts_rounds - p.drafts_rounds));
+                std::fprintf(stderr, "req stats: wall %.1f ms a token; a round (%.0f rounds, %.2f tokens each): wall %.1f ms, layers %.1f, routing waits %.1f, CPU lane %.1f, head %.1f, draft %.1f; CPU picks a token %.1f of %.1f\n",
+                             (t2 - a.t1) / n, r, n / r, (t2 - a.t1) / r, (s.layer_ms - p.layer_ms) / r, (s.gpu_wait_ms - p.gpu_wait_ms) / r, (s.cpu_ms - p.cpu_ms) / r,
+                             (s.head_ms - p.head_ms) / r, (s.draft_ms - p.draft_ms) / r / 2, (double) (s.cpu_experts - p.cpu_experts) / n, (double) (s.experts - p.experts) / n);
+                p = s;
+            }
             std::printf("DONE %lld %lld %zu %.1f %.1f %s %lld %lld %zu 0 0\n", a.r.rid, a.produced, a.r.ids.size(),
                         a.t1 - a.P.t0, t2 - a.t1, a.finish, a.d_acc, a.d_off, a.P.from);
             std::fflush(stdout);

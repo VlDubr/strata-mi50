@@ -349,7 +349,7 @@ __global__ void hc_split_kernel(const float* __restrict__ mixes, const float* __
 
 // hc_mix_kernel with hc_split_kernel behind it: the block that finishes the token's last mix (an atomic count, reset by it) runs
 // the split on warp 0 - the same arithmetic as the two launches, one launch less and no round trip through the launch gap
-__global__ void __launch_bounds__(kThreads) hc_mix_split_kernel(const float* __restrict__ h, const float* __restrict__ fn,
+__global__ void __launch_bounds__(1024) hc_mix_split_kernel(const float* __restrict__ h, const float* __restrict__ fn,
                                                                 int hcdim, float eps, float* mixes, unsigned* cnt,
                                                                 const float* __restrict__ scale,
                                                                 const float* __restrict__ base, int hc, int iters,
@@ -358,7 +358,7 @@ __global__ void __launch_bounds__(kThreads) hc_mix_split_kernel(const float* __r
     const float* w = fn + (size_t) m * hcdim;
     const float* x = h + (size_t) t * hcdim;
     float acc = 0.0f, ss = 0.0f;
-    for (int k = threadIdx.x * 4; k < hcdim; k += kThreads * 4) {
+    for (int k = threadIdx.x * 4; k < hcdim; k += blockDim.x * 4) {
         const float4 hv = *(const float4*) (x + k);
         const float4 wv = *(const float4*) (w + k);
         acc += hv.x * wv.x + hv.y * wv.y + hv.z * wv.z + hv.w * wv.w;
@@ -1609,7 +1609,7 @@ __global__ void __launch_bounds__(512) route_publish_kernel(const float* __restr
                                                             float route_scale, const unsigned long long* __restrict__ vram,
                                                             const float* __restrict__ x, int dim, int* idx, float* w,
                                                             unsigned long long* plan_ptr, Req* req,
-                                                            const float* __restrict__ bias_vl, unsigned vl) {
+                                                            const float* __restrict__ bias_vl, unsigned vl, int sigmoid) {
     __shared__ float sc[1024], bs[1024];
     __shared__ float bv[32];
     __shared__ int bi[32];
@@ -1620,8 +1620,12 @@ __global__ void __launch_bounds__(512) route_publish_kernel(const float* __restr
     if (bias_vl != nullptr && ((vl >> t) & 1u)) bias = bias_vl;
     for (int i = threadIdx.x; i < n; i += blockDim.x) {
         const float l = logits[i];
-        const float sp = l > 20.0f ? l : log1pf(expf(l));
-        sc[i] = sqrtf(sp);
+        if (sigmoid) {   // (GLM-5.3: the arithmetic of glm5::route)
+            sc[i] = 1.0f / (1.0f + expf(-l));
+        } else {
+            const float sp = l > 20.0f ? l : log1pf(expf(l));
+            sc[i] = sqrtf(sp);
+        }
         bs[i] = sc[i] + bias[i];
     }
     __syncthreads();
@@ -1652,9 +1656,10 @@ __global__ void __launch_bounds__(512) route_publish_kernel(const float* __restr
     if (threadIdx.x == 0) {
         float s = 0.0f;
         for (int r = 0; r < k; ++r) s += sc[pick[r]];
+        if (sigmoid) s = fmaxf(s, 6.103515625e-5f);
         int cpu = 0;
         for (int r = 0; r < k; ++r) {
-            const float wv = sc[pick[r]] / (s + 1e-20f) * route_scale;
+            const float wv = sigmoid ? sc[pick[r]] / s * route_scale : sc[pick[r]] / (s + 1e-20f) * route_scale;
             idx[(size_t) t * kPicks + r] = pick[r];
             w[(size_t) t * kPicks + r] = wv;
             plan_ptr[(size_t) t * kPicks + r] = vram[pick[r]];
@@ -1671,6 +1676,99 @@ __global__ void __launch_bounds__(512) route_publish_kernel(const float* __restr
     __syncthreads();
     if (req != nullptr && on_cpu)
         for (int i = threadIdx.x; i < dim; i += blockDim.x) req->x[t][i] = x[(size_t) t * dim + i];
+}
+
+// GLM-5.3's routing with its publishing, route_publish_kernel's picks and weights: the sigmoid of 288 experts fits a warp's
+// registers, so the selection needs no block-wide steps.  The other warps send x to the host meanwhile.
+constexpr int kSigVals = 9;
+__global__ void __launch_bounds__(256) route_publish_sig_kernel(const float* __restrict__ logits, const float* __restrict__ bias,
+                                                                int n, int k, float route_scale,
+                                                                const unsigned long long* __restrict__ vram,
+                                                                const float* __restrict__ x, int dim, int* idx, float* w,
+                                                                unsigned long long* plan_ptr, Req* req) {
+    const int t = blockIdx.x;
+    if (threadIdx.x >= 32) {
+        if (req != nullptr)
+            for (int i = threadIdx.x - 32; i < dim; i += blockDim.x - 32) req->x[t][i] = x[(size_t) t * dim + i];
+        return;
+    }
+    logits += (size_t) t * 1024;
+    const int lane = threadIdx.x;
+    float sc[kSigVals], key[kSigVals];
+#pragma unroll
+    for (int j = 0; j < kSigVals; ++j) {
+        const int i = lane + 32 * j;
+        sc[j] = i < n ? 1.0f / (1.0f + expf(-logits[i])) : 0.0f;
+        key[j] = i < n ? sc[j] + bias[i] : -FLT_MAX;
+    }
+    int pick[16];
+    float pv[16];
+    float sum = 0.0f;
+    for (int r = 0; r < k; ++r) {
+        float best = -FLT_MAX;
+        int bix = 0x7fffffff;
+#pragma unroll
+        for (int j = 0; j < kSigVals; ++j) {
+            const int i = lane + 32 * j;
+            if (i < n && (key[j] > best || (key[j] == best && i < bix))) best = key[j], bix = i;
+        }
+        float bp = 0.0f;
+#pragma unroll
+        for (int j = 0; j < kSigVals; ++j)
+            if (lane + 32 * j == bix) bp = sc[j];
+        for (int o = 16; o > 0; o >>= 1) {
+            const float ov = __shfl_xor_sync(0xffffffffu, best, o);
+            const int oi = __shfl_xor_sync(0xffffffffu, bix, o);
+            const float op = __shfl_xor_sync(0xffffffffu, bp, o);
+            if (ov > best || (ov == best && oi < bix)) best = ov, bix = oi, bp = op;
+        }
+        if (bix >= n) bix = 0;   // (non-finite logits: a valid index; the host path's check does not see this one)
+        pick[r] = bix;
+        pv[r] = bp;
+        sum += bp;
+#pragma unroll
+        for (int j = 0; j < kSigVals; ++j)
+            if (lane + 32 * j == bix) key[j] = -FLT_MAX;
+    }
+    if (lane == 0) {
+        sum = fmaxf(sum, 6.103515625e-5f);
+        for (int r = 0; r < k; ++r) {
+            const float wv = pv[r] / sum * route_scale;
+            idx[(size_t) t * kPicks + r] = pick[r];
+            w[(size_t) t * kPicks + r] = wv;
+            plan_ptr[(size_t) t * kPicks + r] = vram[pick[r]];
+            if (req != nullptr) {
+                req->ids[t][r] = pick[r];
+                req->w[t][r] = wv;
+            }
+        }
+    }
+}
+
+// the router's gate: a block a row, the row in its registers, so T rows of input read it once
+__global__ void __launch_bounds__(256) gate_f32_kernel(const float* __restrict__ W, const float* __restrict__ x, int k, int T,
+                                                       float* __restrict__ y, int ldy) {
+    const int row = blockIdx.x, nv = k / 1024;
+    const float4* w = (const float4*) (W + (size_t) row * k);
+    float4 r[4];
+#pragma unroll
+    for (int j = 0; j < 4; ++j)
+        if (j < nv) r[j] = w[threadIdx.x + j * 256];
+    for (int t = 0; t < T; ++t) {
+        const float4* xv = (const float4*) (x + (size_t) t * k);
+        float acc = 0.0f;
+#pragma unroll
+        for (int j = 0; j < 4; ++j)
+            if (j < nv) {
+                const float4 b = xv[threadIdx.x + j * 256];
+                acc = fmaf(r[j].x, b.x, acc);
+                acc = fmaf(r[j].y, b.y, acc);
+                acc = fmaf(r[j].z, b.z, acc);
+                acc = fmaf(r[j].w, b.w, acc);
+            }
+        acc = block_sum(acc);
+        if (threadIdx.x == 0) y[(size_t) t * ldy + row] = acc;
+    }
 }
 
 // a later layer's m likely picks (route_kernel's choice from its logits) into req->ahead[t][off ..)
@@ -2144,7 +2242,7 @@ attnsplit::AttnSplitScratch split_scratch(cudaStream_t s, int heads) {
 void route_publish(const float* logits, const float* bias, int n, int k, int T, float route_scale,
                    const unsigned long long* vram, const float* x, int dim, int* idx, float* w,
                    unsigned long long* plan_ptr, Req* req, unsigned seq, cudaStream_t s, const float* bias_vl,
-                   unsigned vl, int na0, int na1) {
+                   unsigned vl, int na0, int na1, int sigmoid) {
 #if defined(STRATA_METAL)
     // selection only: the prefetch schedule (req) is published by the CUDA kernel, and is turned on separately here
     if (strata::dsv41::metal_host::route_publish(logits, bias, n, k, T, route_scale, vram, idx, w, plan_ptr,
@@ -2154,9 +2252,16 @@ void route_publish(const float* logits, const float* bias, int n, int k, int T, 
         return;
     }
 #endif
-    strata_ds4_launch(route_publish_kernel, T, 512, 0, s, logits, bias, n, k, route_scale, vram, x, dim, idx, w, plan_ptr, req,
-                                           vl != 0 ? bias_vl : nullptr, vl);
+    if (sigmoid && n <= 32 * kSigVals && k <= 16)
+        strata_ds4_launch(route_publish_sig_kernel, T, 256, 0, s, logits, bias, n, k, route_scale, vram, x, dim, idx, w, plan_ptr, req);
+    else
+        strata_ds4_launch(route_publish_kernel, T, 512, 0, s, logits, bias, n, k, route_scale, vram, x, dim, idx, w, plan_ptr, req,
+                                               vl != 0 ? bias_vl : nullptr, vl, sigmoid);
     if (req != nullptr) strata_ds4_launch(publish_kernel, 1, 1, 0, s, req, T, seq, na0, na1);
+}
+void gate_f32(const float* W, const float* x, int n, int k, int T, float* y, int ldy, cudaStream_t s) {
+    if (k % 1024 != 0 || k > 4096) gemv_f32(W, x, n, k, T, y, ldy, s);
+    else if (T > 0) strata_ds4_launch(gate_f32_kernel, n, 256, 0, s, W, x, k, T, y, ldy);
 }
 void route_ahead(const float* logits, const float* bias, int n, int m, int T, Req* req, int off, cudaStream_t s) {
 #if defined(STRATA_METAL)
@@ -2277,7 +2382,12 @@ void hc_mix(const float* h, const float* fn, int hcdim, int n_mix, int T, float 
 void hc_mix_split(const float* h, const float* fn, int hcdim, int n_mix, int T, float eps, float* mixes, unsigned* cnt,
                   const float* scale, const float* base, int hc, int iters, float hc_eps, float* pre, float* post,
                   float* comb, cudaStream_t s) {
-    strata_ds4_launch(hc_mix_split_kernel, dim3(n_mix, T), kThreads, 0, s, h, fn, hcdim, eps, mixes, cnt, scale, base, hc, iters, hc_eps, pre,
+#if defined(STRATA_USE_HIP)
+    const int mix_threads = 1024;   // (a mix a block, and few mixes: the blocks' length is the kernel's)
+#else
+    const int mix_threads = kThreads;
+#endif
+    strata_ds4_launch(hc_mix_split_kernel, dim3(n_mix, T), mix_threads, 0, s, h, fn, hcdim, eps, mixes, cnt, scale, base, hc, iters, hc_eps, pre,
                                                             post, comb);
 }
 void hc_split(const float* mixes, const float* scale, const float* base, int hc, int iters, float hc_eps, int T,

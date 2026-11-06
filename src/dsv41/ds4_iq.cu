@@ -1574,7 +1574,11 @@ bool gate_up(const Args& a, int groups, int ne_max, cudaStream_t s) {
     if (is_tq(a.tg)) return tq::gate_up(a, groups, ne_max, s);
     if (a.n_embd % 256 != 0 || a.n_ff % (kWarps * kGuRW) != 0) return false;
 #define GU_(T) gu_ne<T>(a, groups, ne_max, s)
-    DS4_IQ_SWITCH(a.tg, GU_)
+    if (a.tg == kQ5_K) GU_(kQ5_K);
+    else if (a.tg == kQ6_K) GU_(kQ6_K);
+    else {
+        DS4_IQ_SWITCH(a.tg, GU_)
+    }
 #undef GU_
     return true;
 }
@@ -1589,7 +1593,11 @@ bool down(const Args& a, int groups, int ne_max, cudaStream_t s) {
     if (is_tq(a.td)) return tq::down(a, groups, ne_max, s);
     if (a.n_ff % 256 != 0 || a.n_embd % (kWarps * kDnRW) != 0) return false;
 #define DN_(T) dn_ne<T>(a, groups, ne_max, s)
-    DS4_IQ_SWITCH(a.td, DN_)
+    if (a.td == kQ5_K) DN_(kQ5_K);
+    else if (a.td == kQ6_K) DN_(kQ6_K);
+    else {
+        DS4_IQ_SWITCH(a.td, DN_)
+    }
 #undef DN_
     return true;
 }
