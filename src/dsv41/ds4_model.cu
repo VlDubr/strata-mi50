@@ -659,6 +659,12 @@ struct Dev {
           *g_beta = nullptr, *g_ko = nullptr, *g_q = nullptr, *g_ob = nullptr, *g_ig = nullptr, *g_d1 = nullptr, *g_d3 = nullptr,
           *g_dh = nullptr;
     uint8_t* g_emb = nullptr;   // (the first layer's device) the Q8_0 embedding table
+    // a prompt's chunk (kGlmChunk rows): the streams, the FFN input, its sum, the FFN's post and comb, the picks
+    float *g_H = nullptr, *g_H2 = nullptr, *g_cx = nullptr, *g_cm = nullptr, *g_cpost = nullptr, *g_ccomb = nullptr, *g_cw = nullptr,
+          *g_cpu = nullptr;
+    int* g_cidx = nullptr;
+    float *h_cx = nullptr, *h_cpart = nullptr, *h_cw = nullptr;   // (pinned) the chunk's rows, the CPU lane's sum, picks
+    int* h_cidx = nullptr;
     int *ridx = nullptr, *topk = nullptr, *cand = nullptr, *tok = nullptr;
     unsigned long long* plan_ptr = nullptr;           // the decode path's VRAM experts (0: on the CPU lane)
     uint8_t* eg_rows = nullptr;
@@ -1196,6 +1202,8 @@ struct Model::Impl {
         double last_pred = 0;                                          // its prediction (s, before its k)
     } pm;
     static constexpr int kWarmRows = 32;     // (warm_after: the run's last rows whose picks it reads ahead)
+    static constexpr int kGlmChunk = 256;   // GLM-5.3: a prompt's rows through a layer at once (glm5_chunk)
+    std::mutex g5_lane;   // (the CPU lane's buffers are one: a device's experts at a time)
     static constexpr int kPickMax = 2048;   // (from here on the flow: windows' work grows with every 16 tokens)
     static constexpr double kPickRes = 0.9;  // (this share of the CPU-lane experts in RAM: windows if predicted faster)
     std::atomic<int> lm_layers{0};           // (layer-major) the layers every chunk went through
@@ -3289,7 +3297,11 @@ struct Model::Impl {
                      dalloc(d, d.g_ob, W * g.heads * g.v_hd, err) && dalloc(d, d.g_ig, W * g.ix_hd, err) &&
                      dalloc(d, d.g_d1, W * g.dense_ff, err) && dalloc(d, d.g_d3, W * g.dense_ff, err) &&
                      dalloc(d, d.g_dh, W * g.dense_ff, err);
-                if (!gk) return false;
+                const size_t C = kGlmChunk;
+                if (!gk || !dalloc(d, d.g_H, C * H * D, err) || !dalloc(d, d.g_H2, C * H * D, err) || !dalloc(d, d.g_cx, C * D, err) ||
+                    !dalloc(d, d.g_cm, C * D, err) || !dalloc(d, d.g_cpost, C * 8, err) || !dalloc(d, d.g_ccomb, C * 64, err) ||
+                    !dalloc(d, d.g_cw, C * kPicks, err) || !dalloc(d, d.g_cidx, C * kPicks, err) || !dalloc(d, d.g_cpu, C * D, err))
+                    return false;
             }
             d.attn_scr.cap = (int) topk_stride();
             if (!dalloc(d, d.attn_scr.rows, (size_t) kAttnScratchT * topk_stride() * g.hd, err)) return false;
@@ -3471,6 +3483,10 @@ struct Model::Impl {
                     (unsigned) embed_pinned[(size_t) g.dim], (unsigned) embed_pinned[(size_t) g.dim + 1]);
 
         }
+        for (Dev& d : devs)
+            if (g.glm5 && (!halloc(d.h_cx, (size_t) kGlmChunk * g.dim, err) || !halloc(d.h_cpart, (size_t) kGlmChunk * g.dim, err) ||
+                           !halloc(d.h_cw, (size_t) kGlmChunk * kPicks, err) || !halloc(d.h_cidx, (size_t) kGlmChunk * kPicks, err)))
+                return false;
         // the host side of the CPU lane and the Engram rows
         const int cols = (pk.eg_ngram - 1) * pk.eg_heads;
         if (!halloc(h_x, (size_t) kWin * g.dim, err) || !halloc(h_w, (size_t) kWin * kPicks, err) ||
@@ -12696,6 +12712,13 @@ struct Model::Impl {
     // n tokens through windows of 16, the last one's logits_rows rows of logits
     bool feed_windows(const int* tokens, int n, int logits_rows, std::string& err) {
         logits_all = false;
+        if (g.glm5 && n >= 2 * kWin) {   // (layer by layer in chunks: an expert read once for the chunk's tokens)
+            const int tail = n % kGlmChunk < 2 * kWin ? n % kGlmChunk : 0;   // (a short end goes in windows: a chunk's cost is by layer)
+            if (!glm5_chunks(tokens, n - tail, tail == 0 ? logits_rows : 0, err)) return false;
+            if (tail == 0) return true;
+            tokens += n - tail;
+            n = tail;
+        }
         for (int a = 0; a < n; a += kWin) {
             const int T = std::min(kWin, n - a);
             if (!forward(tokens + a, T, a + T == n ? logits_rows : 0, err)) return false;
@@ -14194,6 +14217,261 @@ struct Model::Impl {
         std::swap(d.h, d.h2);
         return true;
     }
+    // GLM-5.3's routed experts for a chunk: picks in d.g_cidx / g_cw, rows in d.g_cx, the sum into d.g_cm.  The VRAM experts
+    // go on the stream 128 rows at a time, then the CPU lane takes its own, each expert once for all its rows
+    bool glm5_moe_chunk(Layer& l, Dev& d, int T, std::string& err) {
+        cudaStream_t s = d.st;
+        const int D = g.dim, K = l.k_exp;
+        float *h_cx = d.h_cx, *h_cpart = d.h_cpart, *h_cw = d.h_cw;
+        int* h_cidx = d.h_cidx;
+        CK(cudaMemcpyAsync(h_cidx, d.g_cidx, (size_t) T * kPicks * 4, cudaMemcpyDeviceToHost, s));
+        CK(cudaMemcpyAsync(h_cw, d.g_cw, (size_t) T * kPicks * 4, cudaMemcpyDeviceToHost, s));
+        CK(cudaMemcpyAsync(h_cx, d.g_cx, (size_t) T * D * 4, cudaMemcpyDeviceToHost, s));
+        CK(cudaStreamSynchronize(s));
+        std::vector<std::vector<std::pair<int, float>>> per((size_t) l.n_exp);
+        uint32_t* pr = prof.data() + (size_t) l.il * g.n_exp;
+        for (int t = 0; t < T; ++t)
+            for (int i = 0; i < K; ++i) {
+                const int e = h_cidx[t * kPicks + i];
+                const float w = h_cw[t * kPicks + i];
+                if (e < 0 || e >= l.n_exp || !std::isfinite(w)) {
+                    err = "the router's pick is not valid (layer " + std::to_string(l.il) + ")";
+                    return false;
+                }
+                per[(size_t) e].push_back({t, w});
+                ++pr[e];
+                l.heat[(size_t) e] += 1.0f;
+                if (l.slot[(size_t) e] < 0) l.cpu_hits.push_back(e);
+            }
+        Gather ga;
+        glm5::RowsAdd ra;
+        int vex[128], vrow[128], vn[128], nv = 0, nrows = 0;
+        auto flush = [&]() -> bool {
+            if (nrows == 0) return true;
+            gather_rows(d.g_cx, ga, nrows, D, d.xe, s);
+            x3::MvJob j[2 * 128];
+            int nj = 0;
+            for (int i = 0; i < nv; ++i) {
+                const auto& vm = l.vm[(size_t) vex[i]];
+                j[nj++] = job(vm[0], d.xe + (size_t) vrow[i] * D, d.xg + (size_t) vrow[i] * g.ff, vn[i], D, g.ff);
+                j[nj++] = job(vm[1], d.xe + (size_t) vrow[i] * D, d.xu + (size_t) vrow[i] * g.ff, vn[i], D, g.ff);
+            }
+            if (!mv_n(d, j, nj, err)) return false;
+            swiglu(d.xg, d.xu, nrows * g.ff, g.lim, d.xhh, s);
+            nj = 0;
+            for (int i = 0; i < nv; ++i)
+                j[nj++] = job(l.vm[(size_t) vex[i]][2], d.xhh + (size_t) vrow[i] * g.ff, d.ed + (size_t) vrow[i] * D, vn[i], g.ff, D);
+            if (!mv_n(d, j, nj, err)) return false;
+            glm5::rows_add(d.ed, ra, nrows, D, d.g_cm, s);
+            nv = nrows = 0;
+            return true;
+        };
+        std::vector<Ent> ents;
+        std::vector<std::pair<int, float>> slots;
+        for (int e = 0; e < l.n_exp; ++e) {
+            const auto& pe = per[(size_t) e];
+            if (pe.empty()) continue;
+            const bool on_gpu = l.slot[(size_t) e] >= 0;
+            const int cap = on_gpu ? x3::kMaxMvCols : ent_cap(l);
+            for (size_t a = 0; a < pe.size(); a += (size_t) cap) {
+                const int n = (int) std::min<size_t>((size_t) cap, pe.size() - a);
+                if (on_gpu) {
+                    if (nrows + n > 128 && !flush()) return false;
+                    vex[nv] = e;
+                    vrow[nv] = nrows;
+                    vn[nv++] = n;
+                    for (int i = 0; i < n; ++i, ++nrows) {
+                        ga.src[nrows] = ra.tok[nrows] = pe[a + (size_t) i].first;
+                        ra.w[nrows] = pe[a + (size_t) i].second;
+                    }
+                } else {
+                    Ent en;
+                    en.e = e;
+                    en.n = n;
+                    for (int i = 0; i < n; ++i) {
+                        en.tok[i] = pe[a + (size_t) i].first;
+                        slots.push_back(pe[a + (size_t) i]);
+                    }
+                    ents.push_back(en);
+                }
+            }
+        }
+        if (!flush()) return false;
+        std::lock_guard<std::mutex> lane(g5_lane);
+        st.experts += (int64_t) T * K;
+        if (ents.empty()) return true;
+        st.cpu_experts += (int64_t) slots.size();
+        std::fill(h_cpart, h_cpart + (size_t) T * D, 0.0f);
+        const double tc = now_ms();
+        size_t base = 0;   // (the slots a call holds at most: kSlots, whole entries)
+        for (size_t a = 0; a < ents.size();) {
+            std::vector<Ent> part;
+            int n = 0;
+            while (a < ents.size() && n + ents[a].n <= kSlots) {
+                Ent en = ents[a++];
+                en.slot0 = n;
+                n += en.n;
+                part.push_back(en);
+            }
+            cpu_experts(l, h_cx, part, (size_t) D);
+            for (int sl = 0; sl < n; ++sl) {
+                float* o = h_cpart + (size_t) slots[base + (size_t) sl].first * D;
+                const float wv = slots[base + (size_t) sl].second;
+                const float* y = c_yd.data() + (size_t) sl * D;
+                for (int e = 0; e < D; ++e) o[e] += wv * y[e];
+            }
+            base += (size_t) n;
+        }
+        st.cpu_ms += now_ms() - tc;
+        CK(cudaMemcpyAsync(d.g_cpu, h_cpart, (size_t) T * D * 4, cudaMemcpyHostToDevice, s));
+        glm5::add(d.g_cpu, d.g_cm, (size_t) T * D, s);
+        return true;
+    }
+    // a prompt in chunks, layer by layer: the attention in windows (KDA goes token by token anyway), the routed experts once
+    // for a chunk's rows.  A thread a device: while one device runs its layers on a chunk, the one before it starts the next
+    bool glm5_chunk_stage(int di, int il0, int il1, int64_t p0, const int* tk, int T, std::string& err) {
+        Dev& d = devs[(size_t) di];
+        cudaStream_t s = d.st;
+        const int D = g.dim, H = g.hc;
+        const size_t row = (size_t) H * D;
+        if (il0 == 0)
+            for (int w = 0; w < T; w += kWin) {
+                const int Tw = std::min(kWin, T - w);
+                CK(cudaMemcpyAsync(d.tok, tk + w, (size_t) Tw * 4, cudaMemcpyHostToDevice, s));
+                glm5::embed_q8(d.g_emb, d.tok, Tw, D, H, d.g_H + (size_t) w * row, s);
+            }
+        for (int il = il0; il < il1; ++il) {
+            Layer& l = L[(size_t) il];
+            for (int w = 0; w < T; w += kWin) {
+                const int Tw = std::min(kWin, T - w);
+                float* hb = d.g_H + (size_t) w * row;
+                float *sh = d.h, *sh2 = d.h2;
+                d.h = hb;
+                const bool ok = glm5_attn(l, d, p0 + w, Tw, err);
+                d.h = sh;
+                d.h2 = sh2;
+                if (!ok) return false;
+                CK(cudaMemcpyAsync(hb, sh2, (size_t) Tw * row * 4, cudaMemcpyDeviceToDevice, s));
+                hc_mix_split(hb, l.hcf_fn, H * D, (2 + H) * H, Tw, g.eps, d.mix, d.hccnt, l.hcf_scale, l.hcf_base, H, g.sinkhorn, g.hc_eps,
+                             d.f_pre, d.g_cpost + (size_t) w * 8, d.g_ccomb + (size_t) w * 64, s);
+                float* xw = d.g_cx + (size_t) w * D;
+                hc_pre_norm(hb, d.f_pre, l.ffn_norm, D, H, Tw, g.eps, xw, s);
+                float* mw = d.g_cm + (size_t) w * D;
+                if (l.dense) {
+                    const int F = g.dense_ff;
+                    if (!mv(d, {job(l.d1, xw, d.g_d1, Tw, D, F), job(l.d3, xw, d.g_d3, Tw, D, F)}, err)) return false;
+                    swiglu(d.g_d1, d.g_d3, Tw * F, g.lim, d.g_dh, s);
+                    if (!mv(d, {job(l.d2, d.g_dh, mw, Tw, F, D)}, err)) return false;
+                } else {
+                    gemv_f32(l.gate_w, xw, l.n_exp, D, Tw, d.glog, 1024, s);
+                    glm5::route(d.glog, 1024, l.gate_bias, l.n_exp, l.k_exp, Tw, g.route_scale, d.g_cidx + (size_t) w * kPicks,
+                                d.g_cw + (size_t) w * kPicks, kPicks, s);
+                    if (!mv(d, {job(l.s1, xw, d.sg, Tw, D, g.ff), job(l.s3, xw, d.su, Tw, D, g.ff)}, err)) return false;
+                    swiglu(d.sg, d.su, Tw * g.ff, g.lim, d.sh, s);
+                    if (!mv(d, {job(l.s2, d.sh, mw, Tw, g.ff, D)}, err)) return false;
+                }
+            }
+            if (!l.dense && !glm5_moe_chunk(l, d, T, err)) return false;
+            hc_post(d.g_cm, d.g_H, d.g_cpost, d.g_ccomb, D, H, T, d.g_H2, s);
+            std::swap(d.g_H, d.g_H2);
+        }
+        CK(cudaStreamSynchronize(s));
+        return true;
+    }
+    bool glm5_chunks(const int* tk, int n, int logits_rows, std::string& err) {
+        if (pos + n > o.max_context) {
+            err = "the context is full";
+            return false;
+        }
+        for (int t = 0; t < n; ++t)
+            if (tk[t] < 0 || tk[t] >= g.vocab) {
+                err = "token " + std::to_string(tk[t]) + " out of range";
+                return false;
+            }
+        const int64_t p0 = pos;
+        slot_held = false;
+        for (int t = 0; t < n; ++t) {
+            toks.push_back(tk[t]);
+            ctoks.push_back(ctok(pos + t, tk[t]));
+        }
+        struct Stage {
+            int di, il0, il1;
+        };
+        std::vector<Stage> stages;
+        for (int il = 0; il < g.nl; ++il)
+            if (stages.empty() || stages.back().di != L[(size_t) il].dev) stages.push_back({L[(size_t) il].dev, il, il + 1});
+            else stages.back().il1 = il + 1;
+        const int NS = (int) stages.size(), NC = (n + kGlmChunk - 1) / kGlmChunk;
+        const size_t row = (size_t) g.hc * g.dim;
+        // done[s]: chunks stage s finished; taken[s]: chunks the next stage has copied out of stage s
+        std::vector<int> done((size_t) NS, 0), taken((size_t) NS, 0);
+        std::mutex mu;
+        std::condition_variable cv;
+        std::atomic<bool> failed{false};
+        std::vector<std::string> errs((size_t) NS);
+        const double tl = now_ms();
+        std::vector<std::thread> th;
+        for (int si = 0; si < NS; ++si)
+            th.emplace_back([&, si] {
+                const Stage st_ = stages[(size_t) si];
+                Dev& d = devs[(size_t) st_.di];
+                cudaSetDevice(d.id);
+                for (int k = 0; k < NC && !failed.load(); ++k) {
+                    const int a = k * kGlmChunk, T = std::min(kGlmChunk, n - a);
+                    {
+                        std::unique_lock<std::mutex> lk(mu);
+                        cv.wait(lk, [&] { return failed.load() || ((si == 0 || done[(size_t) si - 1] > k) && (si + 1 == NS || taken[(size_t) si] >= k)); });
+                        if (failed.load()) return;
+                    }
+                    if (si > 0) {
+                        Dev& b = devs[(size_t) stages[(size_t) si - 1].di];
+                        const cudaError_t e = cudaMemcpyPeerAsync(d.g_H, d.id, b.g_H, b.id, (size_t) T * row * 4, d.st);
+                        if (e != cudaSuccess || cudaStreamSynchronize(d.st) != cudaSuccess) {
+                            errs[(size_t) si] = "the chunk's copy between the GPUs failed";
+                            failed.store(true);
+                            cv.notify_all();
+                            return;
+                        }
+                        std::lock_guard<std::mutex> lk(mu);
+                        taken[(size_t) si - 1] = k + 1;
+                        cv.notify_all();
+                    }
+                    std::string e;
+                    if (!glm5_chunk_stage(st_.di, st_.il0, st_.il1, p0 + a, tk + a, T, e)) {
+                        errs[(size_t) si] = e;
+                        failed.store(true);
+                        cv.notify_all();
+                        return;
+                    }
+                    std::lock_guard<std::mutex> lk(mu);
+                    done[(size_t) si] = k + 1;
+                    cv.notify_all();
+                }
+            });
+        for (auto& t : th) t.join();
+        for (auto& e : errs)
+            if (!e.empty()) {
+                err = e;
+                return false;
+            }
+        st.layer_ms += now_ms() - tl;
+        if (std::getenv("DS4_GLM_LOG") != nullptr)
+            std::fprintf(stderr, "glm5 prompt: %d rows at %lld in %d chunks over %d GPUs: %.0f ms\n", n, (long long) p0, NC, NS, now_ms() - tl);
+        const int cur = stages.back().di, last = n - (NC - 1) * kGlmChunk;
+        Dev& d = devs[(size_t) cur];
+        cudaSetDevice(d.id);
+        n_logits = std::min(std::min(logits_rows, last), kWin);
+        if (n_logits > 0) {
+            CK(cudaMemcpyAsync(d.h, d.g_H + (size_t) (last - n_logits) * row, (size_t) n_logits * row * 4, cudaMemcpyDeviceToDevice, d.st));
+            glm5::fill_mean_pre(d.pre, n_logits, g.hc, d.st);
+            if (!head_rows_dev(cur, n_logits, err)) return false;
+        }
+        CK(cudaStreamSynchronize(d.st));
+        pos += n;
+        st.tokens += n;
+        cache_tick(n);
+        return true;
+    }
     bool layer(Layer& L0, int mi, int64_t p0, int T, const WinPlan& wp, std::string& err) {
         Layer& l = member(L0, mi);
         Dev& d = devs[(size_t) l.dev];
@@ -15189,7 +15467,10 @@ bool Model::marks_inside(int n, const std::vector<int64_t>& rel) const {
     }();
     return on && p.inner_cost(n, rel) <= p.chunk;
 }
-int Model::feed_unit() const { return p_->chunk > 0 ? std::max(p_->chunk, (int) p_->o.max_context) : kWin; }
+int Model::feed_unit() const {
+    if (p_->g.glm5) return 16 * Impl::kGlmChunk;   // (a Stop is heard between two of these; each refills the GPUs' pipeline)
+    return p_->chunk > 0 ? std::max(p_->chunk, (int) p_->o.max_context) : kWin;
+}
 void Model::set_progress(std::function<void(int64_t)> f) { p_->progress = std::move(f); }
 void Model::set_cancel(std::function<bool()> f) { p_->cancel = std::move(f); }
 void Model::set_yield(std::function<bool()> f) { p_->yield_to = std::move(f); }

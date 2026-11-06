@@ -26,7 +26,7 @@ void bmv_q8(const uint8_t* W, const float* x, size_t x_stride, int heads, int ro
 /// (tap 3 the current token), state [3][d_inner] (the last inputs, oldest first).  l2: per-head l2 norm (q and k).
 void kda_conv(float* x, const float* conv, float* state, int T, int heads, int hd, bool l2, cudaStream_t s);
 /// The recurrence over a window.  q, k, v, graw [T][heads * hd]; beta_raw [T][heads]; a [heads] (= -exp(A_log));
-/// dt [heads * hd]; S [heads][hd (value j)][hd (key i)] F32, updated; out [T][heads * hd].
+/// dt [heads * hd]; S [heads][hd (key i)][hd (value j)] F32, updated; out [T][heads * hd].
 void kda_scan(const float* q, const float* k, const float* v, const float* graw, const float* beta_raw, const float* a,
               const float* dt, float lower_bound, float* S, int T, int heads, int hd, float* out, cudaStream_t s);
 /// o[t][h][:] = rms(o[t][h][:]) * norm * sigmoid(g2[t][h][:]), in place.
@@ -48,6 +48,16 @@ void idx_score(const float* iq, const float* w, size_t w_stride, const uint16_t*
 /// tail of its pool.  qa [T][heads][r]; c the latent cache F16 [..][r]; out [T][heads][r].
 void mla_attn(const float* qa, const uint16_t* c, const int* sel, int sel_stride, int64_t p0, int top_n,
               int kpool, int heads, int r, int T, float scale, float* out, cudaStream_t s);
+
+// ---- a prompt's chunk
+/// out[tok[r]] += w[r] * rows[r] for n rows in order (n <= 128): one thread a column, so a token's sum is in a fixed order.
+struct RowsAdd {
+    int tok[128];
+    float w[128];
+};
+void rows_add(const float* rows, const RowsAdd& a, int n, int dim, float* out, cudaStream_t s);
+/// y[i] += x[i].
+void add(const float* x, float* y, size_t n, cudaStream_t s);
 
 // ---- the router
 /// Sigmoid scores, the top k of score + bias picked, the unbiased scores normalised and scaled.  logits rows are ld apart.

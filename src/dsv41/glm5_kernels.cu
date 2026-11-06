@@ -149,10 +149,10 @@ __global__ void __launch_bounds__(64) kda_scan_kernel(const float* __restrict__ 
     __shared__ float sk[HD], sq[HD], sg[HD];
     const int h = blockIdx.x, j = blockIdx.y * 64 + threadIdx.x;
     const size_t di = (size_t) heads * HD;
-    float* col = S + ((size_t) h * HD + j) * HD;
+    float* col = S + (size_t) h * HD * HD + j;   // ([key i][value j]: a wave's lanes read one row)
     float st[HD];
 #pragma unroll
-    for (int i = 0; i < HD; ++i) st[i] = col[i];
+    for (int i = 0; i < HD; ++i) st[i] = col[(size_t) i * HD];
     const float na = -a[h];   // exp(A_log)
     const float scale = rsqrtf((float) HD);
     for (int t = 0; t < T; ++t) {
@@ -182,7 +182,7 @@ __global__ void __launch_bounds__(64) kda_scan_kernel(const float* __restrict__ 
         out[base + j] = o * scale;
     }
 #pragma unroll
-    for (int i = 0; i < HD; ++i) col[i] = st[i];
+    for (int i = 0; i < HD; ++i) col[(size_t) i * HD] = st[i];
 }
 
 // grid (heads, T), hd threads
@@ -312,6 +312,17 @@ __global__ void __launch_bounds__(256) mla_attn_kernel(const float* __restrict__
     for (int j = 0; j < PER; ++j) o[threadIdx.x + j * 256] = n > 0 ? acc[j] / den : 0.0f;
 }
 
+__global__ void rows_add_kernel(const float* __restrict__ rows, RowsAdd a, int n, int dim, float* out) {
+    const int e = blockIdx.x * blockDim.x + threadIdx.x;
+    if (e >= dim) return;
+    for (int r = 0; r < n; ++r) out[(size_t) a.tok[r] * dim + e] += a.w[r] * rows[(size_t) r * dim + e];
+}
+
+__global__ void add_kernel(const float* __restrict__ x, float* y, size_t n) {
+    const size_t i = (size_t) blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) y[i] += x[i];
+}
+
 // grid T, 512 threads (n <= 512)
 __global__ void __launch_bounds__(512) route_kernel(const float* __restrict__ logits, int ld,
                                                     const float* __restrict__ bias, int n, int k, float scale,
@@ -415,6 +426,12 @@ void mla_attn(const float* qa, const uint16_t* c, const int* sel, int sel_stride
     const size_t sh = (size_t) (2048 + 64) * 4;
     mla_attn_kernel<512><<<dim3((unsigned) heads, (unsigned) T), 256, sh, s>>>(qa, c, sel, sel_stride, p0, top_n, kpool,
                                                                                heads, scale, out);
+}
+void rows_add(const float* rows, const RowsAdd& a, int n, int dim, float* out, cudaStream_t s) {
+    rows_add_kernel<<<(dim + 255) / 256, 256, 0, s>>>(rows, a, n, dim, out);
+}
+void add(const float* x, float* y, size_t n, cudaStream_t s) {
+    add_kernel<<<(unsigned) ((n + 255) / 256), 256, 0, s>>>(x, y, n);
 }
 void route(const float* logits, int ld, const float* bias, int n, int k, int T, float scale, int* idx, float* w,
            int picks_stride, cudaStream_t s) {
