@@ -1170,6 +1170,7 @@ void launch_dn(const Args& a, int groups, cudaStream_t s) {
 template <int T>
 void gu_ne(const Args& a, int groups, int ne, cudaStream_t s) {
     if (ne <= 1) launch_gu<T, 1>(a, groups, s);
+    else if (ne <= 2) launch_gu<T, 2>(a, groups, s);
     else if (ne <= 4) launch_gu<T, 4>(a, groups, s);
     else if (ne <= 8) launch_gu<T, 8>(a, groups, s);
     else launch_gu<T, 16>(a, groups, s);
@@ -1177,6 +1178,7 @@ void gu_ne(const Args& a, int groups, int ne, cudaStream_t s) {
 template <int T>
 void dn_ne(const Args& a, int groups, int ne, cudaStream_t s) {
     if (ne <= 1) launch_dn<T, 1>(a, groups, s);
+    else if (ne <= 2) launch_dn<T, 2>(a, groups, s);
     else if (ne <= 4) launch_dn<T, 4>(a, groups, s);
     else if (ne <= 8) launch_dn<T, 8>(a, groups, s);
     else launch_dn<T, 16>(a, groups, s);

@@ -1681,14 +1681,15 @@ __global__ void __launch_bounds__(512) route_publish_kernel(const float* __restr
 // GLM-5.3's routing with its publishing, route_publish_kernel's picks and weights: the sigmoid of 288 experts fits a warp's
 // registers, so the selection needs no block-wide steps.  The other warps send x to the host meanwhile.
 constexpr int kSigVals = 9;
-__global__ void __launch_bounds__(256) route_publish_sig_kernel(const float* __restrict__ logits, const float* __restrict__ bias,
+__global__ void __launch_bounds__(1024) route_publish_sig_kernel(const float* __restrict__ logits, const float* __restrict__ bias,
                                                                 int n, int k, float route_scale,
                                                                 const unsigned long long* __restrict__ vram,
                                                                 const float* __restrict__ x, int dim, int* idx, float* w,
                                                                 unsigned long long* plan_ptr, Req* req, int T, unsigned seq) {
     if (req != nullptr)
         for (int t = 0; t < T; ++t)
-            for (int i = threadIdx.x; i < dim; i += blockDim.x) req->x[t][i] = x[(size_t) t * dim + i];
+            for (int i = threadIdx.x * 4; i < dim; i += blockDim.x * 4)
+                *(float4*) &req->x[t][i] = *(const float4*) (x + (size_t) t * dim + i);
     const int lane = threadIdx.x & 31;
     for (int t = threadIdx.x >> 5; t < T; t += (int) (blockDim.x >> 5)) {
     const float* lg = logits + (size_t) t * 1024;
@@ -1699,9 +1700,8 @@ __global__ void __launch_bounds__(256) route_publish_sig_kernel(const float* __r
         sc[j] = i < n ? 1.0f / (1.0f + expf(-lg[i])) : 0.0f;
         key[j] = i < n ? sc[j] + bias[i] : -FLT_MAX;
     }
-    int pick[16];
-    float pv[16];
-    float sum = 0.0f;
+    int my_pick = 0;   // (lane r keeps pick r: an array indexed by r would live in scratch memory)
+    float my_p = 0.0f;
     for (int r = 0; r < k; ++r) {
         float best = -FLT_MAX;
         int bix = 0x7fffffff;
@@ -1721,24 +1721,22 @@ __global__ void __launch_bounds__(256) route_publish_sig_kernel(const float* __r
             if (ov > best || (ov == best && oi < bix)) best = ov, bix = oi, bp = op;
         }
         if (bix >= n) bix = 0;   // (non-finite logits: a valid index; the host path's check does not see this one)
-        pick[r] = bix;
-        pv[r] = bp;
-        sum += bp;
+        if (lane == r) my_pick = bix, my_p = bp;
 #pragma unroll
         for (int j = 0; j < kSigVals; ++j)
             if (lane + 32 * j == bix) key[j] = -FLT_MAX;
     }
-    if (lane == 0) {
-        sum = fmaxf(sum, 6.103515625e-5f);
-        for (int r = 0; r < k; ++r) {
-            const float wv = pv[r] / sum * route_scale;
-            idx[(size_t) t * kPicks + r] = pick[r];
-            w[(size_t) t * kPicks + r] = wv;
-            plan_ptr[(size_t) t * kPicks + r] = vram[pick[r]];
-            if (req != nullptr) {
-                req->ids[t][r] = pick[r];
-                req->w[t][r] = wv;
-            }
+    float sum = 0.0f;
+    for (int r = 0; r < k; ++r) sum += __shfl_sync(0xffffffffu, my_p, r);
+    sum = fmaxf(sum, 6.103515625e-5f);
+    if (lane < k) {
+        const float wv = my_p / sum * route_scale;
+        idx[(size_t) t * kPicks + lane] = my_pick;
+        w[(size_t) t * kPicks + lane] = wv;
+        plan_ptr[(size_t) t * kPicks + lane] = vram[my_pick];
+        if (req != nullptr) {
+            req->ids[t][lane] = my_pick;
+            req->w[t][lane] = wv;
         }
     }
     }
@@ -2262,7 +2260,7 @@ void route_publish(const float* logits, const float* bias, int n, int k, int T, 
     }
 #endif
     if (sigmoid && n <= 32 * kSigVals && k <= 16) {
-        strata_ds4_launch(route_publish_sig_kernel, 1, 256, 0, s, logits, bias, n, k, route_scale, vram, x, dim, idx, w, plan_ptr, req, T, seq);
+        strata_ds4_launch(route_publish_sig_kernel, 1, 1024, 0, s, logits, bias, n, k, route_scale, vram, x, dim, idx, w, plan_ptr, req, T, seq);
         return;
     }
     strata_ds4_launch(route_publish_kernel, T, 512, 0, s, logits, bias, n, k, route_scale, vram, x, dim, idx, w, plan_ptr, req,
