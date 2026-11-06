@@ -9,10 +9,15 @@ Validated on 4x MI50 32 GB, 91 GB RAM, ROCm 10, with `unsloth/GLM-5.3-Flash` UD-
 
 | Measure | llama.cpp b11786 | Strata |
 |---|---|---|
-| Decode, short prompt | 10.8 tok/s | 20 tok/s |
-| Decode after a 2647-token prompt | 10.7 tok/s | 18 tok/s |
-| Prefill, 2647 tokens | 74 tok/s | 145 tok/s |
+| Decode, short prompt | 10.8 tok/s | 21.5 tok/s |
+| Decode after a 16.7K-token prompt | not measured | 18.5 tok/s |
+| Prefill, 2647 tokens of documentation | 74 tok/s | 145 tok/s |
+| Prefill, 16.7K and 27.9K tokens of C++ | not measured | 99 and 108 tok/s |
 | Load | about 14 min | about 2 min |
+
+The 145 tok/s was measured with a profile of documents and code alone. The deployed profile mixes in chat, so a document prompt
+may read somewhat slower. A fact at the start of a 27.9K-token prompt was found correctly. A prompt that ends differently goes back
+to a restore point: a 16.7K-token prompt took 9 s instead of 168 s.
 
 Numerics against llama.cpp on the same weights, greedy:
 
@@ -72,7 +77,9 @@ Image: `docker build -t strata-gfx906:0.2.10-mi50-glm5 -f deploy/mi50/Dockerfile
 1. Pack, with the paths the container sees:
    `python tools/dsv41/pack_glm5.py --model /data/models/GLM-5.3-Flash-UD-Q4_K_XL/UD-Q4_K_XL --out /data/packs/glm5-flash`
 2. Put the expert profile at `/data/packs/glm5-flash/expert-profile.bin`. Without one the experts are placed in index order,
-   and the CPU lane takes 33% of the picks instead of about 18%.
+   and the CPU lane takes 33% of the picks instead of about 21%. The deployed profile is two runs, each layer's counts as
+   shares, added with equal weight: 40 prompts of documents and code, and about 30 chat answers in several languages.
+   Prompts alone are not enough: their tokens outnumber the answers', and chat then stays at 33%.
 3. Write `/data/config/glm5.json`. Do not name it `strata-*.json`, or the Qwen image's setup takes it:
 
 ```json
@@ -92,7 +99,8 @@ words and sampling.
 
 Settings measured on this machine:
 
-- `--no-expert-cache --ssd-cache 0`: 18 tok/s. The defaults copy the CPU lane's experts into RAM and swap them: 15 tok/s.
+- `--no-expert-cache --ssd-cache 0`: 18 tok/s after a 2647-token prompt. The defaults copy the CPU lane's experts into RAM and
+  swap them: 15 tok/s.
 - The model needs about 65 GB of RAM for the page cache of the CPU lane's experts. Other large workloads slow decode.
 
 ## Tests
