@@ -2703,6 +2703,7 @@ struct Model::Impl {
             o.prefill_chunk = 0;
             o.dspark = false;
             o.vision = false;
+            o.seqs = 1;   // (one conversation: the state of a KDA layer has no second copy yet)
         }
         if (g.dim == 0 || g.nl == 0 || (int) g.ratios.size() < g.nl) {
             err = o.pack + "/ds4.txt: incomplete geometry";

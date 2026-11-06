@@ -1023,6 +1023,10 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     endif()
     # the router on a non-finite gate input (valid, distinct picks; the same picks as the host's top-k when finite) and its
     # launch times; needs a GPU, no model; built by name
+    # GLM-5.3-Flash's kernels against double-precision references; needs a GPU, no model
+    add_executable(glm5_kernels_test EXCLUDE_FROM_ALL tests/dsv41/glm5_kernels_test.cu src/dsv41/glm5_kernels.cu)
+    target_include_directories(glm5_kernels_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${_strata_gpu_include_directories})
+    target_link_libraries(glm5_kernels_test PRIVATE ${_strata_gpu_runtime_target})
     add_executable(ds4_route_guard_test EXCLUDE_FROM_ALL tests/dsv41/ds4_route_guard_test.cu src/dsv41/ds4_kernels.cu)
     target_include_directories(ds4_route_guard_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${_strata_gpu_include_directories})
     target_link_libraries(ds4_route_guard_test PRIVATE strata_dsv41_kernels ${_strata_gpu_runtime_target} Threads::Threads)

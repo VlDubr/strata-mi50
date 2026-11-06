@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+#
+# GLM-5.3-Flash on the DeepSeek engine path (strata-dsv41) for MI50 / MI60.  Adds the engine and the GLM server pieces to the
+# Qwen image; docs/GLM5.md has the pack, the config and the numbers.
+#
+# Build from the repository root:
+#   docker build -t strata-gfx906:0.2.10-mi50-glm5 -f deploy/mi50/Dockerfile.glm5 .
+
+ARG BASE=strata-gfx906:0.2.10-mi50-vision
+FROM ${BASE}
+
+COPY . /tmp/src
+RUN cmake -S /tmp/src -B /tmp/b -G Ninja -DCMAKE_BUILD_TYPE=Release \
+        -DSTRATA_ENABLE_HIP=ON -DSTRATA_ENABLE_CUDA=OFF -DSTRATA_EXPERIMENTAL_GFX906=ON -DCMAKE_HIP_ARCHITECTURES=gfx906 \
+        -DSTRATA_BUILD_TESTS=OFF -DSTRATA_BUILD_DSV41=ON -DSTRATA_NATIVE_EXPERTS=ON -DSTRATA_PORTABLE=ON \
+        -DCMAKE_C_COMPILER=/usr/bin/cc -DCMAKE_CXX_COMPILER=/usr/bin/c++ \
+        -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++ -DCMAKE_PREFIX_PATH=/opt/rocm \
+        -DSTRATA_GGML_DIR=/opt/strata/third_party/llama.cpp \
+    && cmake --build /tmp/b -j "$(nproc)" --target strata-dsv41 \
+    && cp /tmp/b/strata-dsv41 /opt/strata/engine/strata-dsv41 \
+    && cp -r /tmp/src/serve/. /opt/strata/serve/ \
+    && cp /tmp/src/tools/strata_tokenizer.py /opt/strata/tools/ \
+    && mkdir -p /opt/strata/tools/dsv41 \
+    && cp /tmp/src/tools/dsv41/pack_gguf.py /tmp/src/tools/dsv41/pack_glm5.py /opt/strata/tools/dsv41/ \
+    && cp /tmp/src/deploy/mi50/glm5-entry.sh /opt/strata/glm5-entry.sh \
+    && chmod 755 /opt/strata/glm5-entry.sh \
+    && rm -rf /tmp/src /tmp/b
+
+ENTRYPOINT ["/opt/strata/glm5-entry.sh"]
