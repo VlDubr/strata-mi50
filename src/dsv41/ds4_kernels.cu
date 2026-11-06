@@ -1685,20 +1685,18 @@ __global__ void __launch_bounds__(256) route_publish_sig_kernel(const float* __r
                                                                 int n, int k, float route_scale,
                                                                 const unsigned long long* __restrict__ vram,
                                                                 const float* __restrict__ x, int dim, int* idx, float* w,
-                                                                unsigned long long* plan_ptr, Req* req) {
-    const int t = blockIdx.x;
-    if (threadIdx.x >= 32) {
-        if (req != nullptr)
-            for (int i = threadIdx.x - 32; i < dim; i += blockDim.x - 32) req->x[t][i] = x[(size_t) t * dim + i];
-        return;
-    }
-    logits += (size_t) t * 1024;
-    const int lane = threadIdx.x;
+                                                                unsigned long long* plan_ptr, Req* req, int T, unsigned seq) {
+    if (req != nullptr)
+        for (int t = 0; t < T; ++t)
+            for (int i = threadIdx.x; i < dim; i += blockDim.x) req->x[t][i] = x[(size_t) t * dim + i];
+    const int lane = threadIdx.x & 31;
+    for (int t = threadIdx.x >> 5; t < T; t += (int) (blockDim.x >> 5)) {
+    const float* lg = logits + (size_t) t * 1024;
     float sc[kSigVals], key[kSigVals];
 #pragma unroll
     for (int j = 0; j < kSigVals; ++j) {
         const int i = lane + 32 * j;
-        sc[j] = i < n ? 1.0f / (1.0f + expf(-logits[i])) : 0.0f;
+        sc[j] = i < n ? 1.0f / (1.0f + expf(-lg[i])) : 0.0f;
         key[j] = i < n ? sc[j] + bias[i] : -FLT_MAX;
     }
     int pick[16];
@@ -1742,6 +1740,17 @@ __global__ void __launch_bounds__(256) route_publish_sig_kernel(const float* __r
                 req->w[t][r] = wv;
             }
         }
+    }
+    }
+    if (req == nullptr) return;
+    __syncthreads();   // (publish_kernel's end, one launch less)
+    if (threadIdx.x == 0) {
+        __threadfence_system();
+        req->na[0] = 0;
+        req->na[1] = 0;
+        req->T = T;
+        __threadfence_system();
+        *(volatile unsigned*) &req->seq = seq;
     }
 }
 
@@ -2252,11 +2261,12 @@ void route_publish(const float* logits, const float* bias, int n, int k, int T, 
         return;
     }
 #endif
-    if (sigmoid && n <= 32 * kSigVals && k <= 16)
-        strata_ds4_launch(route_publish_sig_kernel, T, 256, 0, s, logits, bias, n, k, route_scale, vram, x, dim, idx, w, plan_ptr, req);
-    else
-        strata_ds4_launch(route_publish_kernel, T, 512, 0, s, logits, bias, n, k, route_scale, vram, x, dim, idx, w, plan_ptr, req,
-                                               vl != 0 ? bias_vl : nullptr, vl, sigmoid);
+    if (sigmoid && n <= 32 * kSigVals && k <= 16) {
+        strata_ds4_launch(route_publish_sig_kernel, 1, 256, 0, s, logits, bias, n, k, route_scale, vram, x, dim, idx, w, plan_ptr, req, T, seq);
+        return;
+    }
+    strata_ds4_launch(route_publish_kernel, T, 512, 0, s, logits, bias, n, k, route_scale, vram, x, dim, idx, w, plan_ptr, req,
+                                           vl != 0 ? bias_vl : nullptr, vl, sigmoid);
     if (req != nullptr) strata_ds4_launch(publish_kernel, 1, 1, 0, s, req, T, seq, na0, na1);
 }
 void gate_f32(const float* W, const float* x, int n, int k, int T, float* y, int ldy, cudaStream_t s) {

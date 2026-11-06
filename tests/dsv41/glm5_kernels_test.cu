@@ -110,9 +110,7 @@ static void test_kda() {
     int t0 = 0;
     for (int Tw : {T1, T2}) {
         const size_t o = (size_t) t0 * DI;
-        glm5::kda_conv(dq + o, dc0, dst, Tw, H, HD, true, 0);
-        glm5::kda_conv(dk + o, dc1, dst + (size_t) 3 * DI, Tw, H, HD, true, 0);
-        glm5::kda_conv(dv + o, dc2, dst + (size_t) 6 * DI, Tw, H, HD, false, 0);
+        glm5::kda_conv(dq + o, dk + o, dv + o, dc0, dc1, dc2, dst, Tw, H, HD, 0);
         glm5::kda_scan(dq + o, dk + o, dv + o, dg + o, db + (size_t) t0 * H, da, ddt, lb, dS, Tw, H, HD, dout + o, 0);
         t0 += Tw;
     }
@@ -120,13 +118,13 @@ static void test_kda() {
     check("kda scan", down(dout, (size_t) T * DI), want, 5e-5);
     // a verify window's snapshots: the state after each row but the last is the state a window that ended there leaves
     {
-        const size_t ns = (size_t) H * HD * HD, nc = (size_t) 3 * DI;
+        const size_t ns = (size_t) H * HD * HD, nc = (size_t) 9 * DI;
         std::vector<float> st0(ns, 0.0f), cv0(nc, 0.0f), x((size_t) 2 * DI), g2((size_t) 2 * DI), b2((size_t) 2 * H);
         for (size_t i = 0; i < x.size(); ++i) x[i] = g2[i] = 0.01f * (float) ((i * 37) % 101) - 0.5f;
         for (size_t i = 0; i < b2.size(); ++i) b2[i] = 0.1f * (float) i - 0.3f;
         auto run = [&](int rows, float* snap, float* csnap, std::vector<float>& st_out, std::vector<float>& cv_out) {
             float *q = up(x), *k = up(x), *v = up(x), *g = up(g2), *b = up(b2), *S = up(st0), *C = up(cv0), *o = up(x);
-            glm5::kda_conv(q, dc0, C, rows, H, HD, false, 0, csnap, nc);
+            glm5::kda_conv(q, k, v, dc0, dc1, dc2, C, rows, H, HD, 0, csnap, nc);
             glm5::kda_scan(q, k, v, g, b, da, ddt, lb, S, rows, H, HD, o, 0, snap);
             cudaDeviceSynchronize();
             st_out = down(S, ns);

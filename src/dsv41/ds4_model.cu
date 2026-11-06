@@ -24,6 +24,7 @@
 #include "ds4_iq.cuh"
 #include "ds4_gguf_cpu.hpp"
 #include "ds4_kernels.cuh"
+#include "ds4_stripe.hpp"
 #include "glm5_kernels.cuh"
 #include "glm5_vision.cuh"
 #include "ds4_os.hpp"
@@ -1321,6 +1322,7 @@ struct Model::Impl {
         std::vector<std::vector<uint8_t>> win;
         std::vector<std::vector<float>> comp;
         std::vector<std::vector<float>> kda;   // (GLM-5.3) a KDA layer's recurrent state, then its conv rows
+        std::vector<std::vector<uint16_t>> kg; // (GLM-5.3) an MLA layer's indexer rows of the pool not complete yet
         bool shared = false;          // (a mark's: the end of a shared start, kept before the others)
         uint64_t used = 0;            // (a mark's: its last use, mark_clock)
     };
@@ -3044,7 +3046,8 @@ struct Model::Impl {
                 for (const auto& kt : pk.t)
                     if (kt.first.rfind(P, 0) == 0 && kt.first.find(".ffn.experts.") == std::string::npos) b += kt.second.bytes;
                 b += l.kda ? (size_t) g.kda_heads * g.kda_hd * g.kda_hd * 4 + (size_t) 9 * g.kda_heads * g.kda_hd * 4
-                           : ((size_t) o.max_context + 64) * ((size_t) g.hd * 2 + (size_t) g.ix_hd * 4 + (size_t) g.ix_hd * 2 / g.kpool);
+                           : ((size_t) o.max_context + 64) * ((size_t) g.hd * 2 + (size_t) g.ix_hd * 2 / g.kpool) +
+                                 (size_t) glm5::kKgRing * g.ix_hd * 4;
             }
             l.dense_bytes = b;
         }
@@ -5256,7 +5259,7 @@ struct Model::Impl {
             }
             ok = dalloc(d, l.m_kb, (size_t) kb->bytes, err, acct) && upload(d, *kb, l.m_kb, err) &&
                  dalloc(d, l.m_vb, (size_t) vb->bytes, err, acct) && upload(d, *vb, l.m_vb, err) &&
-                 dalloc(d, l.c_lat, cap * g.hd, err, &d.caches) && dalloc(d, l.i_kg, cap * 2 * g.ix_hd, err, &d.caches) &&
+                 dalloc(d, l.c_lat, cap * g.hd, err, &d.caches) && dalloc(d, l.i_kg, (size_t) glm5::kKgRing * 2 * g.ix_hd, err, &d.caches) &&
                  dalloc(d, l.i_pool, (cap / g.kpool + 1) * g.ix_hd, err, &d.caches);
             if (!ok) return false;
         }
@@ -5959,6 +5962,54 @@ struct Model::Impl {
             }
         }
         std::stable_sort(warm.begin(), warm.end(), [](const Warm& a, const Warm& b) { return a.share > b.share; });
+        if (!o.ram_stripe.empty() && !warm.empty()) {   // --ram-stripe: all of them in memory striped over the RAM's regions
+            std::vector<double> bounds;
+            for (size_t a = 0; a < o.ram_stripe.size();) {
+                const size_t b = std::min(o.ram_stripe.find(',', a), o.ram_stripe.size());
+                bounds.push_back(std::atof(o.ram_stripe.substr(a, b - a).c_str()));
+                a = b + 1;
+            }
+            size_t total = 0;
+            for (const Warm& w : warm) total += (L[(size_t) w.layer].blob + 4095) & ~(size_t) 4095;
+            os::drop_cached(pk.maps, pk.fds);   // (the page cache out of the way, for the huge pages)
+            std::string report;
+            uint8_t* base = stripe::alloc(total, bounds, report);
+            if (base == nullptr) {
+                std::fprintf(stderr, "ds4: --ram-stripe: %s; the experts stay in the files' page cache\n", report.c_str());
+            } else {
+                for (Layer& l : L)
+                    if (l.lay.fmt == gg::kFmtMXFP4) l.ram.assign((size_t) l.n_exp, -1);
+                ram_slots.resize(warm.size());
+                size_t off = 0;
+                for (size_t i = 0; i < warm.size(); ++i) {
+                    ram_slots[i] = base + off;
+                    off += (L[(size_t) warm[i].layer].blob + 4095) & ~(size_t) 4095;
+                }
+                std::atomic<size_t> ri{0};
+                std::atomic<bool> rfail{false};
+                std::vector<std::thread> rt;
+                for (int t = 0; t < 12; ++t)
+                    rt.emplace_back([&] {
+                        for (size_t i; (i = ri.fetch_add(1)) < warm.size();) {
+                            const Layer& l = L[(size_t) warm[i].layer];
+                            if (!read_mx_file(l, warm[i].e, ram_slots[i])) rfail.store(true);
+                            for (int r = 0; r < 3; ++r)
+                                os::advise(pk.fds[(size_t) l.mx_file[r]], l.mx_off[r] + (uint64_t) warm[i].e * l.mx_stride[r],
+                                           mx_part_bytes(l, r), false);
+                        }
+                    });
+                for (auto& t : rt) t.join();
+                if (rfail.load()) {
+                    err = "reading the CPU lane's experts from the model's files failed";
+                    return false;
+                }
+                for (size_t i = 0; i < warm.size(); ++i) L[(size_t) warm[i].layer].ram[(size_t) warm[i].e] = (int) i;
+                ram_held = (int) warm.size();
+                std::fprintf(stderr, "ds4: --ram-stripe: %zu CPU-lane experts, %.1f GB: %s (%.1f s)\n", warm.size(), total / 1e9,
+                             report.c_str(), (now_ms() - t0) / 1000.0);
+                return true;
+            }
+        }
         if (!ram_tier && !warm.empty()) {   // copied into RAM (copy_experts decides), the rest read ahead into what is left
             std::vector<std::pair<int, int>> hot;
             for (const Warm& w : warm) hot.push_back({w.layer, w.e});
@@ -7212,7 +7263,7 @@ struct Model::Impl {
                                                      !dalloc(d, q.k_conv[k], 9 * DI, err, &d.caches)))
                             return false;
                         if (l.c_lat != nullptr && (!dalloc(d, q.c_lat[k], cap * g.hd, err, &d.caches) ||
-                                                   !dalloc(d, q.i_kg[k], cap * 2 * g.ix_hd, err, &d.caches) ||
+                                                   !dalloc(d, q.i_kg[k], (size_t) glm5::kKgRing * 2 * g.ix_hd, err, &d.caches) ||
                                                    !dalloc(d, q.i_pool[k], (cap / g.kpool + 1) * g.ix_hd, err, &d.caches)))
                             return false;
                         continue;
@@ -7387,10 +7438,18 @@ struct Model::Impl {
         c.win.resize(L.size());
         c.comp.resize(L.size() * 2);
         c.kda.resize(L.size());
+        c.kg.assign(L.size(), {});
         for (size_t i = 0; i < L.size(); ++i) {
             Layer& l = L[i];
             Dev& d = devs[(size_t) l.dev];
             cudaSetDevice(d.id);
+            if (l.i_kg != nullptr && pos % g.kpool != 0) {   // (the ring passes on: the rows a later pool needs stay here)
+                const size_t n = (size_t) (pos % g.kpool), rb = (size_t) 2 * g.ix_hd;
+                c.kg[i].resize(n * rb);
+                for (size_t r = 0; r < n; ++r)
+                    cudaMemcpyAsync(c.kg[i].data() + r * rb, l.i_kg + (size_t) ((pos - (int64_t) n + (int64_t) r) & (glm5::kKgRing - 1)) * rb, rb * 2,
+                                    cudaMemcpyDeviceToHost, d.st);
+            }
             if (l.k_state != nullptr) {
                 const size_t ns = glm5_state_floats(), nc = glm5_conv_floats();
                 c.kda[i].resize(ns + nc);
@@ -7508,6 +7567,12 @@ struct Model::Impl {
                 Layer& l = member(L[i], m);
                 Dev& d = devs[(size_t) l.dev];
                 cudaSetDevice(d.id);
+                if (l.i_kg != nullptr && i < c.kg.size() && !c.kg[i].empty()) {
+                    const size_t rb = (size_t) 2 * g.ix_hd, n = c.kg[i].size() / rb;
+                    for (size_t r = 0; r < n; ++r)
+                        cudaMemcpyAsync(l.i_kg + (size_t) ((c.pos - (int64_t) n + (int64_t) r) & (glm5::kKgRing - 1)) * rb, c.kg[i].data() + r * rb, rb * 2,
+                                        cudaMemcpyHostToDevice, d.st);
+                }
                 if (l.k_state != nullptr) {
                     const size_t ns = glm5_state_floats(), nc = glm5_conv_floats();
                     cudaMemcpyAsync(l.k_state, c.kda[i].data(), ns * 4, cudaMemcpyHostToDevice, d.st);
@@ -8483,6 +8548,12 @@ struct Model::Impl {
         constexpr int RB = 64;   // rows a job
         const int E = g.dim, FF = g.ff, FFh = FF / NH, Eh = E / NH;
         const int GB = (FFh + RB - 1) / RB, DB = (Eh + RB - 1) / RB, ne = (int) ents.size();
+        // (--ram-stripe: the jobs running together a third of a matrix apart, so that they read from all the RAM's regions;
+        //  n a power of two here, the odd stride goes through every block once)
+        const auto spread = [this](int k, int n) {
+            if (o.ram_stripe.empty() || (n & (n - 1)) != 0 || n < 8) return k;
+            return (int) (((long long) k * ((n / 3) | 1)) & (n - 1));
+        };
         gg::IqCpu fm;
         std::string ferr;
         if (!gg::iq_cpu_fmt(gg::expert_type(l.lay, 0), gg::expert_type(l.lay, 2), E, FF, fm, ferr) ||
@@ -8561,7 +8632,7 @@ struct Model::Impl {
         for (int X = 0; X < NH; ++X)
             f[X] = [&, X](int j) {
                 const Ent& en = ents[(size_t) (ord != nullptr ? ord[j / GB] : j / GB)];
-                const int r0 = X * FFh + (j % GB) * RB, r1 = std::min(X * FFh + FFh, r0 + RB);
+                const int r0 = X * FFh + spread(j % GB, GB) * RB, r1 = std::min(X * FFh + FFh, r0 + RB);
                 const void* ap[kEntMax];
                 float* hp[kEntMax];
                 for (int i = 0; i < en.n; ++i) {
@@ -8583,7 +8654,7 @@ struct Model::Impl {
         for (int X = 0; X < NH; ++X)
             f[X] = [&, X](int j) {
                 const Ent& en = ents[(size_t) (ord != nullptr ? ord[j / DB] : j / DB)];
-                const int r0 = X * Eh + (j % DB) * RB, r1 = std::min(X * Eh + Eh, r0 + RB);
+                const int r0 = X * Eh + spread(j % DB, DB) * RB, r1 = std::min(X * Eh + Eh, r0 + RB);
                 const void* hp[kEntMax];
                 float* yp[kEntMax];
                 for (int i = 0; i < en.n; ++i) {
@@ -14470,9 +14541,7 @@ struct Model::Impl {
             for (int r = 0; r < nruns; ++r) {
                 const GlmRun& u = runs[r];
                 const size_t o1 = (size_t) u.r0 * DI;
-                glm5::kda_conv(d.g_xq + o1, l.k_cq, u.cv, u.n, NH, HD, true, s, bak ? l.k_cbak : nullptr, nc);
-                glm5::kda_conv(d.g_xk + o1, l.k_ck, u.cv + (size_t) 3 * DI, u.n, NH, HD, true, s, bak ? l.k_cbak + (size_t) 3 * DI : nullptr, nc);
-                glm5::kda_conv(d.g_xv + o1, l.k_cv, u.cv + (size_t) 6 * DI, u.n, NH, HD, false, s, bak ? l.k_cbak + (size_t) 6 * DI : nullptr, nc);
+                glm5::kda_conv(d.g_xq + o1, d.g_xk + o1, d.g_xv + o1, l.k_cq, l.k_ck, l.k_cv, u.cv, u.n, NH, HD, s, bak ? l.k_cbak : nullptr, nc);
                 glm5::kda_scan(d.g_xq + o1, d.g_xk + o1, d.g_xv + o1, d.g_graw + o1, d.g_beta + (size_t) u.r0 * NH, l.k_a, l.k_dt, g.kda_lb,
                                u.st, u.n, NH, HD, d.g_ko + o1, s, bak ? l.k_bak : nullptr);
             }

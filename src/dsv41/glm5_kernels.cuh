@@ -10,6 +10,10 @@
 
 namespace strata::ds4::glm5 {
 
+/// The indexer's key | gate rows are read only once, for the pool they complete: a ring of this many rows (a power of two) a
+/// layer and conversation, by position.  A window writes far fewer rows; a restore point keeps the rows of its open pool.
+constexpr int kKgRing = 1024;
+
 // ---- shared
 /// Every row of pre (stride 8) to 1 / hc: the mean of the streams through hc_pre_norm, GLM's collapse before the head.
 void fill_mean_pre(float* pre, int T, int hc, cudaStream_t s);
@@ -34,8 +38,8 @@ void argmax_conf(const float* logits, int n, int* tok, float* conf, cudaStream_t
 /// One of q, k, v through its causal depthwise conv and SiLU, in place, over a window: x [T][d_inner], conv [d_inner][4]
 /// (tap 3 the current token), state [3][d_inner] (the last inputs, oldest first).  l2: per-head l2 norm (q and k).
 /// snap (a verify window): the state after each row but the last at snap + t * snap_stride, 3 groups of heads * hd.
-void kda_conv(float* x, const float* conv, float* state, int T, int heads, int hd, bool l2, cudaStream_t s,
-              float* snap = nullptr, size_t snap_stride = 0);
+void kda_conv(float* xq, float* xk, float* xv, const float* cq, const float* ck, const float* cv, float* state, int T, int heads, int hd,
+              cudaStream_t s, float* snap = nullptr, size_t snap_stride = 0);
 /// The recurrence over a window.  q, k, v, graw [T][heads * hd]; beta_raw [T][heads]; a [heads] (= -exp(A_log));
 /// dt [heads * hd]; S [heads][hd (key i)][hd (value j)] F32, updated; out [T][heads * hd].
 void kda_scan(const float* q, const float* k, const float* v, const float* graw, const float* beta_raw, const float* a,

@@ -127,9 +127,16 @@ __global__ void __launch_bounds__(256) bmv_q8_kernel(const uint8_t* __restrict__
 }
 
 // grid heads, hd threads: thread c is channel c of its head, the window in order
-__global__ void kda_conv_kernel(float* x, const float* __restrict__ conv, float* state, int T, int d_inner, int l2, float* snap,
-                                size_t snap_stride) {
-    const int c = blockIdx.x * blockDim.x + threadIdx.x;
+struct Conv3 {
+    float* x[3];
+    const float* conv[3];
+};
+__global__ void kda_conv_kernel(Conv3 a, float* state, int T, int d_inner, float* snap, size_t snap_stride) {
+    const int c = blockIdx.x * blockDim.x + threadIdx.x, which = blockIdx.y, l2 = which < 2;   // (q, k, v: q and k normed)
+    float* x = a.x[which];
+    const float* __restrict__ conv = a.conv[which];
+    state += (size_t) which * 3 * d_inner;
+    if (snap != nullptr) snap += (size_t) which * 3 * d_inner;
     const float w0 = conv[(size_t) c * 4], w1 = conv[(size_t) c * 4 + 1], w2 = conv[(size_t) c * 4 + 2],
                 w3 = conv[(size_t) c * 4 + 3];
     float s0 = state[c], s1 = state[(size_t) d_inner + c], s2 = state[(size_t) 2 * d_inner + c];
@@ -292,7 +299,7 @@ __global__ void idx_rows_kernel(const float* __restrict__ ik, const float* __res
     const float mean = block_sum(v) / (float) hd;
     const float c = v - mean;
     const float inv = rsqrtf(block_sum(c * c) / (float) hd + eps);
-    uint16_t* o = kg + (size_t) (p0 + t) * 2 * hd;
+    uint16_t* o = kg + (size_t) ((p0 + t) & (kKgRing - 1)) * 2 * hd;
     o[i] = f2h(c * inv * w[i] + b[i]);
     o[hd + i] = f2h(ig[(size_t) t * hd + i]);
 }
@@ -302,14 +309,14 @@ __global__ void idx_pool_kernel(const uint16_t* __restrict__ kg, const float* __
                                 int64_t first, uint16_t* pooled) {
     const int64_t p = first + blockIdx.x;
     const int d = threadIdx.x;
-    const uint16_t* row = kg + (size_t) (p * kpool) * 2 * hd;
+    const auto row = [&](int k) { return kg + (size_t) ((p * kpool + k) & (kKgRing - 1)) * 2 * hd; };
     float m = -FLT_MAX;
-    for (int k = 0; k < kpool; ++k) m = fmaxf(m, h2f(row[(size_t) k * 2 * hd + hd + d]) + ape[(size_t) k * hd + d]);
+    for (int k = 0; k < kpool; ++k) m = fmaxf(m, h2f(row(k)[hd + d]) + ape[(size_t) k * hd + d]);
     float den = 0.0f, num = 0.0f;
     for (int k = 0; k < kpool; ++k) {
-        const float e = expf(h2f(row[(size_t) k * 2 * hd + hd + d]) + ape[(size_t) k * hd + d] - m);
+        const float e = expf(h2f(row(k)[hd + d]) + ape[(size_t) k * hd + d] - m);
         den += e;
-        num += e * h2f(row[(size_t) k * 2 * hd + d]);
+        num += e * h2f(row(k)[d]);
     }
     pooled[(size_t) p * hd + d] = f2h(num / den);
 }
@@ -474,9 +481,10 @@ void bmv_q8(const uint8_t* W, const float* x, size_t x_stride, int heads, int ro
     bmv_q8_kernel<<<dim3((unsigned) ((rows + 7) / 8), (unsigned) heads), 256, (size_t) T * k * 4, s>>>(W, x, x_stride, rows, k,
                                                                                                        T, y, y_stride);
 }
-void kda_conv(float* x, const float* conv, float* state, int T, int heads, int hd, bool l2, cudaStream_t s, float* snap,
-              size_t snap_stride) {
-    kda_conv_kernel<<<heads, hd, 0, s>>>(x, conv, state, T, heads * hd, l2 ? 1 : 0, snap, snap_stride);
+void kda_conv(float* xq, float* xk, float* xv, const float* cq, const float* ck, const float* cv, float* state, int T, int heads, int hd,
+              cudaStream_t s, float* snap, size_t snap_stride) {
+    Conv3 a{{xq, xk, xv}, {cq, ck, cv}};
+    kda_conv_kernel<<<dim3((unsigned) heads, 3), hd, 0, s>>>(a, state, T, heads * hd, snap, snap_stride);
 }
 void mtp_in(const float* e, const float* h, int ring, int first, bool zero_first, const float* enorm, const float* hnorm,
             int dim, int T, float eps, float* x, cudaStream_t s) {
