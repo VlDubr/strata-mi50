@@ -12,7 +12,7 @@ The deployed configuration: context 131072, four conversations, the multi-token 
 | Measure | llama.cpp b11786 | Strata, deployed | Strata, without head, tower and seats |
 |---|---|---|---|
 | Decode, one conversation, sampled at the model card's settings | 10.8 tok/s | 23-26 tok/s | 20.5-21.5 tok/s |
-| Decode, four conversations at once | not measured | 28 tok/s in all | - |
+| Decode, four short answers at once | not measured | 23-28 tok/s in all | - |
 | Prefill, 14K tokens of C++ | not measured | 78 tok/s | not measured |
 | Prefill, 2647 tokens of documentation | 74 tok/s | not measured | 145 tok/s |
 | Prefill, 16.7K and 27.9K tokens of C++ | not measured | not measured | 99 and 108 tok/s |
