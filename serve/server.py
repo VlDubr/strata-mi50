@@ -5492,6 +5492,9 @@ class Service:
         empty thinking block).  The engine (--tail-role-token) checkpoints in front of that turn."""
         effort = kwargs.get("reasoning_effort")
         off = kwargs.get("enable_thinking") is False
+        if self.family == "glm5-next" and off:          # its template has no such switch: the empty block its past turns carry
+            text = self.template.render(messages, tools=tools, **self.glm5_off_kwargs(kwargs))
+            return text + "</think>" if text.endswith("<think>") else text
         if not self.effort_end or (not off and effort in (None, "", "xhigh", "high")):
             return self.template.render(messages, tools=tools, **kwargs)
         base = {k: v for k, v in kwargs.items() if k not in ("reasoning_effort", "enable_thinking")}
@@ -5502,6 +5505,11 @@ class Service:
             return full
         tail = "" if off else EFFORT_TURN.format(EFFORT_TEXT.get(effort, EFFORT_TEXT["medium"]))
         return history + tail + full[len(mine):]
+
+    @staticmethod
+    def glm5_off_kwargs(kwargs) -> dict:
+        """GLM-5.3's template kwargs with the thinking off: the lowest effort line (its default is Max)."""
+        return {**{k: v for k, v in kwargs.items() if k != "enable_thinking"}, "reasoning_effort": "low"}
 
     def encode_prompt(self, messages, tools, kwargs, store: bool = True) -> list[int]:
         """The request's prompt: the template rendered and tokenized.  #537: a <think> / </think> written inside a
@@ -5809,6 +5817,8 @@ class Service:
             off = kwargs.get("enable_thinking") is False        # render_prompt's rule for #458's effort_end
             kw = ({k: v for k, v in kwargs.items() if k not in ("reasoning_effort", "enable_thinking")}
                   if self.effort_end and (off or effort not in (None, "", "xhigh", "high")) else dict(kwargs))
+            if self.family == "glm5-next" and off:
+                kw = self.glm5_off_kwargs(kw)
             kw["add_generation_prompt"] = False
             text = self.template.render(marked, tools=marked_tools, **kw)
             cut = text.find(self.PREFIX_END)

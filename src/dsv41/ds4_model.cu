@@ -1083,6 +1083,7 @@ struct WinPlan {
     int nrow = 0;
     int rseq[kWin] = {};
     int64_t rpos[kWin] = {};
+    const int* rtok = nullptr;   // (GLM-5.3, its embedding on the GPU) row t's token
     unsigned seq[kMaxL] = {};
     int topk[kMaxL][kWin] = {}, cand[kMaxL][kWin] = {};
 };
@@ -1332,6 +1333,8 @@ struct Model::Impl {
         std::vector<uint8_t*> win;                   // [layer member] (sq_base[layer] + member)
         std::vector<float*> c_kv, c_score;
         std::vector<std::vector<uint8_t*>> ckv, ik;   // [source][device]
+        std::vector<float*> k_state, k_conv;          // GLM-5.3 [layer member]: the KDA state, the MLA caches by position
+        std::vector<uint16_t*> c_lat, i_kg, i_pool;
     };
     std::vector<SeqState> sqs;   // empty: one conversation (Options::seqs 1)
     int sq_bound = 0;
@@ -2703,7 +2706,6 @@ struct Model::Impl {
             o.prefill_chunk = 0;
             o.dspark = false;
             o.vision = false;
-            o.seqs = 1;   // (one conversation: the state of a KDA layer has no second copy yet)
         }
         if (g.dim == 0 || g.nl == 0 || (int) g.ratios.size() < g.nl) {
             err = o.pack + "/ds4.txt: incomplete geometry";
@@ -7136,6 +7138,11 @@ struct Model::Impl {
             q.c_score.assign((size_t) nmem, nullptr);
             q.ckv.assign(srcs.size(), std::vector<uint8_t*>(devs.size(), nullptr));
             q.ik.assign(srcs.size(), std::vector<uint8_t*>(devs.size(), nullptr));
+            q.k_state.assign((size_t) nmem, nullptr);
+            q.k_conv.assign((size_t) nmem, nullptr);
+            q.c_lat.assign((size_t) nmem, nullptr);
+            q.i_kg.assign((size_t) nmem, nullptr);
+            q.i_pool.assign((size_t) nmem, nullptr);
             for (size_t i = 0; i < L.size(); ++i)
                 for (int m = 0; m < L[i].nm; ++m) {
                     Layer& l = member(L[i], m);
@@ -7144,9 +7151,25 @@ struct Model::Impl {
                         q.win[k] = l.win;
                         q.c_kv[k] = l.c_kv;
                         q.c_score[k] = l.c_score;
+                        q.k_state[k] = l.k_state;
+                        q.k_conv[k] = l.k_conv;
+                        q.c_lat[k] = l.c_lat;
+                        q.i_kg[k] = l.i_kg;
+                        q.i_pool[k] = l.i_pool;
                         continue;
                     }
                     Dev& d = devs[(size_t) l.dev];
+                    if (g.glm5) {
+                        const size_t DI = (size_t) g.kda_heads * g.kda_hd, cap = (size_t) o.max_context + 64;
+                        if (l.k_state != nullptr && (!dalloc(d, q.k_state[k], DI * g.kda_hd, err, &d.caches) ||
+                                                     !dalloc(d, q.k_conv[k], 9 * DI, err, &d.caches)))
+                            return false;
+                        if (l.c_lat != nullptr && (!dalloc(d, q.c_lat[k], cap * g.hd, err, &d.caches) ||
+                                                   !dalloc(d, q.i_kg[k], cap * 2 * g.ix_hd, err, &d.caches) ||
+                                                   !dalloc(d, q.i_pool[k], (cap / g.kpool + 1) * g.ix_hd, err, &d.caches)))
+                            return false;
+                        continue;
+                    }
                     if (!dalloc(d, q.win[k], (size_t) g.win * win_rb(), err, &d.caches)) return false;
                     if (l.c_kv != nullptr && !dalloc(d, q.c_kv[k], (size_t) l.ratio * g.hd, err, &d.caches)) return false;
                     if (l.c_score != nullptr && !dalloc(d, q.c_score[k], (size_t) l.ratio * g.hd, err, &d.caches))
@@ -7251,6 +7274,11 @@ struct Model::Impl {
                 l.win = q.win[k];
                 l.c_kv = q.c_kv[k];
                 l.c_score = q.c_score[k];
+                l.k_state = q.k_state[k];
+                l.k_conv = q.k_conv[k];
+                l.c_lat = q.c_lat[k];
+                l.i_kg = q.i_kg[k];
+                l.i_pool = q.i_pool[k];
             }
         if (mtp_only) return;
         for (size_t j = 0; j < srcs.size(); ++j)
@@ -13643,7 +13671,7 @@ struct Model::Impl {
             Dev& d = devs[(size_t) cur];
             cudaSetDevice(d.id);
             if (g.glm5) {
-                CK(cudaMemcpyAsync(d.tok, toks.data() + p0, (size_t) T * 4, cudaMemcpyHostToDevice, d.st));
+                CK(cudaMemcpyAsync(d.tok, wplan.nrow > 0 ? wplan.rtok : toks.data() + p0, (size_t) T * 4, cudaMemcpyHostToDevice, d.st));
                 glm5::embed_q8(d.g_emb, d.tok, T, D, H, d.h, d.st);
             } else {
                 CK(emb_upload(d.emb_rows, h_emb, (size_t) T * D * 2, d.st));
@@ -14149,9 +14177,36 @@ struct Model::Impl {
     // layer L0 for the window, as group member mi (its share of the heads, of the output projection and of the FFNs;
     // the partial sums all-reduced across the group)
     // GLM-5.3's attention sub-block, KDA or sparse MLA, through the hyper-connections: d.h in, d.h out
+    // the rows of a window by conversation: its state, and where its rows start (one run unless a multi step's)
+    struct GlmRun {
+        int r0 = 0, n = 0;
+        int64_t p0 = 0;
+        float *st = nullptr, *cv = nullptr;
+        uint16_t *lat = nullptr, *kg = nullptr, *pool = nullptr;
+    };
+    int glm5_runs(const Layer& l, int64_t p0, int T, GlmRun* out) const {
+        const WinPlan& wp = wplan;
+        if (wp.nrow == 0) {
+            out[0] = GlmRun{0, T, p0, l.k_state, l.k_conv, l.c_lat, l.i_kg, l.i_pool};
+            return 1;
+        }
+        int n = 0;
+        for (int t = 0; t < T; ++t) {
+            if (t > 0 && wp.rseq[t] == wp.rseq[t - 1]) {
+                ++out[n - 1].n;
+                continue;
+            }
+            const SeqState& q = sqs[(size_t) wp.rseq[t]];
+            const size_t k = (size_t) sq_base[(size_t) l.il];
+            out[n++] = GlmRun{t, 1, wp.rpos[t], q.k_state[k], q.k_conv[k], q.c_lat[k], q.i_kg[k], q.i_pool[k]};
+        }
+        return n;
+    }
     bool glm5_attn(Layer& l, Dev& d, int64_t p0, int T, std::string& err) {
         cudaStream_t s = d.st;
         const int D = g.dim, H = g.hc;
+        GlmRun runs[kWin];
+        const int nruns = glm5_runs(l, p0, T, runs);
         hc_mix_split(d.h, l.hca_fn, H * D, (2 + H) * H, T, g.eps, d.mix, d.hccnt, l.hca_scale, l.hca_base, H, g.sinkhorn, g.hc_eps,
                      d.a_pre, d.a_post, d.a_comb, s);
         hc_pre_norm(d.h, d.a_pre, l.attn_norm, D, H, T, g.eps, d.x, s);
@@ -14162,10 +14217,15 @@ struct Model::Impl {
                     err))
                 return false;
             if (!mv(d, {job(l.k_fb, d.g_fa, d.g_graw, T, HD, DI), job(l.k_gb, d.g_ga, d.g_g2, T, HD, DI)}, err)) return false;
-            glm5::kda_conv(d.g_xq, l.k_cq, l.k_conv, T, NH, HD, true, s);
-            glm5::kda_conv(d.g_xk, l.k_ck, l.k_conv + (size_t) 3 * DI, T, NH, HD, true, s);
-            glm5::kda_conv(d.g_xv, l.k_cv, l.k_conv + (size_t) 6 * DI, T, NH, HD, false, s);
-            glm5::kda_scan(d.g_xq, d.g_xk, d.g_xv, d.g_graw, d.g_beta, l.k_a, l.k_dt, g.kda_lb, l.k_state, T, NH, HD, d.g_ko, s);
+            for (int r = 0; r < nruns; ++r) {
+                const GlmRun& u = runs[r];
+                const size_t o1 = (size_t) u.r0 * DI;
+                glm5::kda_conv(d.g_xq + o1, l.k_cq, u.cv, u.n, NH, HD, true, s);
+                glm5::kda_conv(d.g_xk + o1, l.k_ck, u.cv + (size_t) 3 * DI, u.n, NH, HD, true, s);
+                glm5::kda_conv(d.g_xv + o1, l.k_cv, u.cv + (size_t) 6 * DI, u.n, NH, HD, false, s);
+                glm5::kda_scan(d.g_xq + o1, d.g_xk + o1, d.g_xv + o1, d.g_graw + o1, d.g_beta + (size_t) u.r0 * NH, l.k_a, l.k_dt, g.kda_lb,
+                               u.st, u.n, NH, HD, d.g_ko + o1, s);
+            }
             glm5::kda_out_norm(d.g_ko, d.g_g2, l.k_norm, T, NH, HD, g.eps, s);
             if (!mv(d, {job(l.k_wo, d.g_ko, d.ao, T, DI, D)}, err)) return false;
         } else {
@@ -14174,29 +14234,40 @@ struct Model::Impl {
                         job(l.i_wgate, d.x, d.g_ig, T, D, ID)}, err))
                 return false;
             glm5::rms_rows(d.qr, l.q_norm, g.q_lora, T, (size_t) g.q_lora, g.eps, d.qr, s);
-            glm5::mla_latent(d.kvr, l.kv_norm, R, T, g.eps, l.c_lat, p0, s);
-            glm5::idx_rows(d.ikr, d.g_ig, l.ik_norm, l.ik_bias, ID, T, g.ln_eps, l.i_kg, p0, s);
+            for (int r = 0; r < nruns; ++r) {
+                const GlmRun& u = runs[r];
+                glm5::mla_latent(d.kvr + (size_t) u.r0 * R, l.kv_norm, R, u.n, g.eps, u.lat, u.p0, s);
+                glm5::idx_rows(d.ikr + (size_t) u.r0 * ID, d.g_ig + (size_t) u.r0 * ID, l.ik_norm, l.ik_bias, ID, u.n, g.ln_eps, u.kg, u.p0, s);
+            }
             if (!mv(d, {job(l.wq_b, d.qr, d.g_q, T, g.q_lora, (size_t) NH * QK), job(l.i_wq_b, d.qr, d.iq, T, g.q_lora, (size_t) IH * ID)},
                     err))
                 return false;
             glm5::bmv_q8(l.m_kb, d.g_q, (size_t) NH * QK, NH, R, QK, T, d.q, (size_t) NH * R, s);
             gemv_f32(l.i_proj, d.x, IH, D, T, d.iw, 64, s);
-            const int64_t pool0 = p0 / KP, pool1 = (p0 + T) / KP;   // the pools this window completes
-            glm5::idx_pool(l.i_kg, l.i_ape, ID, KP, pool0, (int) (pool1 - pool0), l.i_pool, s);
             const int top = g.ix_topk / KP;
-            Rows lim;
-            int nmax = 0;
-            for (int t = 0; t < T; ++t) {
-                lim.n[t] = (int) ((p0 + t + 1) / KP);
-                lim.k[t] = std::min(top, lim.n[t]);
-                nmax = std::max(nmax, lim.n[t]);
-            }
             const long long ss = (long long) o.max_context + 64;
-            if (nmax > 0) {
-                glm5::idx_score(d.iq, d.iw, 64, l.i_pool, IH, ID, T, p0, KP, nmax, 1.0f / std::sqrt((float) ID * (float) IH), d.scores, ss, s);
-                topk(d.scores, ss, T, lim, nullptr, 0, 1, d.topk, (int) topk_stride(), s);
+            const int ks = (int) topk_stride();
+            for (int r = 0; r < nruns; ++r) {
+                const GlmRun& u = runs[r];
+                const int64_t pool0 = u.p0 / KP, pool1 = (u.p0 + u.n) / KP;   // the pools these rows complete
+                glm5::idx_pool(u.kg, l.i_ape, ID, KP, pool0, (int) (pool1 - pool0), u.pool, s);
+                Rows lim;
+                int nmax = 0;
+                for (int t = 0; t < u.n; ++t) {
+                    lim.n[t] = (int) ((u.p0 + t + 1) / KP);
+                    lim.k[t] = std::min(top, lim.n[t]);
+                    nmax = std::max(nmax, lim.n[t]);
+                }
+                float* sc = d.scores + (size_t) u.r0 * (size_t) ss;
+                int* tp = d.topk + (size_t) u.r0 * (size_t) ks;
+                if (nmax > 0) {
+                    glm5::idx_score(d.iq + (size_t) u.r0 * IH * ID, d.iw + (size_t) u.r0 * 64, 64, u.pool, IH, ID, u.n, u.p0, KP, nmax,
+                                    1.0f / std::sqrt((float) ID * (float) IH), sc, ss, s);
+                    topk(sc, ss, u.n, lim, nullptr, 0, 1, tp, ks, s);
+                }
+                glm5::mla_attn(d.q + (size_t) u.r0 * NH * R, u.lat, tp, ks, u.p0, top, KP, NH, R, u.n, 1.0f / std::sqrt((float) QK),
+                               d.o + (size_t) u.r0 * NH * R, s);
             }
-            glm5::mla_attn(d.q, l.c_lat, d.topk, (int) topk_stride(), p0, top, KP, NH, R, T, 1.0f / std::sqrt((float) QK), d.o, s);
             glm5::bmv_q8(l.m_vb, d.o, (size_t) NH * R, NH, VD, R, T, d.g_ob, (size_t) NH * VD, s);
             if (!mv(d, {job(l.mla_wo, d.g_ob, d.ao, T, (size_t) NH * VD, D)}, err)) return false;
         }
@@ -15100,8 +15171,9 @@ struct Model::Impl {
         }
         st.engram_ms += now_ms() - te;
         const int D = g.dim;
-        for (int t = 0; t < T; ++t)
+        for (int t = 0; t < T && !g.glm5; ++t)
             std::memcpy(h_emb + (size_t) t * D, embed_pinned + (size_t) tk[t] * D, (size_t) D * 2);
+        wp.rtok = tk.data();
         plan_window(0, T, wp);
         prof_window = false;
         n_logits = T;
