@@ -308,9 +308,13 @@ four conversations, multi-token head with two drafts, picture tower on. Sampled 
 | Decode, one answer | 10.8 tok/s | **36 tok/s** |
 | Decode, two answers at once, total | not measured | 31 tok/s |
 | Decode, four answers at once, total | not measured | 37 tok/s |
-| Prefill, 14K tokens | not measured | 78 tok/s |
+| Prefill, 14K tokens | not measured | **192 tok/s** |
+| Prefill, 28K tokens | not measured | 190 tok/s |
 | 14K-token prompt with a new end, from a restore point | not measured | 10 s instead of 180 s |
-| Load | about 14 min | about 2 min |
+| Load | about 14 min | about 2.5 min |
+
+Prefill is measured with `--prompt-ring 16`: a prompt's experts that are not in VRAM go to the cards over PCIe
+instead of being computed on the CPU. Without it, 14K tokens read at 78 tok/s. [docs/GLM5.md](docs/GLM5.md#prompts) has the details.
 
 What works: the OpenAI and Anthropic APIs, streaming, tool calls, pictures, thinking off (`reasoning_effort: none`,
 `enable_thinking: false`, or Anthropic `thinking: disabled`), restore points. Against llama.cpp on the same weights, greedy

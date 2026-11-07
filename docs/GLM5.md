@@ -15,13 +15,14 @@ striped over the RAM's regions. The speeds are API rates over six chat answers o
 | Decode, one conversation, sampled at the model card's settings | 10.8 tok/s | 36 tok/s | 20.5-21.5 tok/s |
 | Decode, two answers at once | not measured | 31 tok/s in all | - |
 | Decode, four answers at once | not measured | 37 tok/s in all | - |
-| Prefill, 14K tokens of C++ | not measured | 77 tok/s | not measured |
+| Prefill, 14K tokens of C++ | not measured | 192 tok/s | not measured |
+| Prefill, 28K tokens of C++ | not measured | 190 tok/s | not measured |
 | Prefill, 2647 tokens of documentation | 74 tok/s | not measured | 145 tok/s |
 | Prefill, 16.7K and 27.9K tokens of C++ | not measured | not measured | 99 and 108 tok/s |
-| Load | about 14 min | about 2 min | about 2 min |
+| Load | about 14 min | about 2.5 min | about 2 min |
 
 The four conversations, the head and the tower take VRAM from the experts: 4950 experts on the CPU lane instead of about 4100.
-That is what slows prefill. With two conversations the 14K prompt reads at 84 tok/s, and chat decode gains 2%.
+The prefill rows are with `--prompt-ring 16` (below, "Prompts"). Without it the 14K prompt reads at 77 tok/s.
 The 145 tok/s was measured with a profile of documents and code alone. A fact at the start of a 27.9K-token prompt was found
 correctly. A prompt that ends differently goes back to a restore point: a 14K-token prompt took 10 s instead of 179 s.
 
@@ -33,6 +34,35 @@ Numerics against llama.cpp on the same weights, greedy:
 - A greedy comparison on long prompts must therefore use the top-k logprobs, not the exact text.
 
 The server's token ids and rendered chat template match llama.cpp on all reference prompts.
+
+## Prompts
+
+`Impl::glm5_chunks` reads a prompt in chunks that flow through the four cards, a card's layers at a time. Without `--prompt-ring`, a chunk's
+experts that are not in VRAM run on the CPU lane, one card at a time. On a 14K prompt the lane was 88% of a chunk's time: 77 tok/s.
+
+`--prompt-ring N` gives each card a ring of N VRAM slots (16 slots are 281 MiB). At load the striped RAM of the CPU lane's experts is pinned for
+the GPUs (76.6 GB, about 20 s). A chunk of a prompt then copies those experts from RAM into the ring on a stream of its own, half a ring ahead of the
+kernels, and the card computes them as it computes its resident ones. A copy costs the same whatever the number of rows, so a chunk grows to 1024
+rows with the ring (512 under 4096 rows, 256 under 1024). Chunks of 256 rows or fewer stay on the lane: it is as fast there. Decode does not use the
+ring. It needs `--ram-stripe`; without it the log says so and prompts stay on the lane. `HSA_ENABLE_SDMA=1` (in `run-glm5.sh`) puts the copies on
+the copy engines: the 14K prompt took 98 s instead of 105 s (in an early build that pinned the RAM during the first prompt, about 20 s of each).
+
+| Prompt | Lane | Ring |
+|---|---|---|
+| 486 tokens | 70 tok/s | 66 tok/s |
+| 1283 tokens | 86 tok/s | 108 tok/s |
+| 2992 tokens | 82 tok/s | 118 tok/s |
+| 14015 tokens | 78 tok/s | 192 tok/s |
+| 27893 tokens | 75 tok/s | 191 tok/s |
+
+Decode stays at 36 tok/s alone and 36 in all with four. The fact at the start was found in every prompt. Numerics: the ring computes those experts
+with the GPU's rounding instead of the lane's, as a different placement does. After a 5000-token prompt, over 899 scored positions, the ring and the
+lane agree on the top token at 842; the lane against itself on another placement agrees at 835. Perplexity: lane 12.28, other placement 12.24, ring
+12.17. Two runs of the ring gave the same logits bit for bit. A six-minute run of long prompts beside chat answers had no error.
+
+With the ring, the GPU's time in a prompt is the dense GEMVs: `q8_mv_kernel` for attention's Q8_0 projections was 41% of it, the experts 25%, the
+MLA attention 13%. `q8_mv_kernel` takes two rows a warp at 8 or more columns, so a window's activations come through L1 once for both: 98 to
+93 s on the same early build. Four rows a warp were slower: 163 tok/s against 192 on the final build.
 
 ## What is not implemented
 
@@ -123,7 +153,8 @@ Image: `docker build -t strata-gfx906:0.2.10-mi50-glm5 -f deploy/mi50/Dockerfile
 {"exe": "/opt/strata/engine/strata-dsv41",
  "args": ["--pack", "/data/packs/glm5-flash", "--max-context", "131072", "--eos", "154820,154827,154829", "--dspark", "on",
           "--dspark-block", "2", "--parallel", "4", "--ram-stripe", "33.5,65.5", "--tp", "1", "--threads", "off", "--prefill-chunk", "0",
-          "--expert-profile", "/data/packs/glm5-flash/expert-profile.bin", "--profile-readonly", "--no-expert-cache", "--ssd-cache", "0"],
+          "--expert-profile", "/data/packs/glm5-flash/expert-profile.bin", "--profile-readonly", "--no-expert-cache", "--ssd-cache", "0",
+          "--prompt-ring", "16"],
  "cwd": "/opt/strata", "tokenizer": "/data/packs/glm5-flash/tokenizer", "model_name": "glm-5.3-flash",
  "arch": "deepseek41", "family": "glm5-next", "log": "/data/logs/strata-glm5.log", "lib_dirs": ["/opt/rocm/lib"], "port": 8080,
  "engine_ready_s": 3600, "backend": "hip", "experimental_gfx906": true, "gpu": [0, 1, 2, 3], "gpus_asked": true, "api_key": "..."}
@@ -156,7 +187,7 @@ Settings measured on this machine:
   the reference texts (25% at 0.15). It is off.
 
 P2P and tensor parallel: `hipMemcpyPeer` between these cards runs at 11-22 GB/s without enabling peer access, so the prompt path's copies need no change, and a
-chunk's hand-offs take about 0.3% of its time by estimate. The model has no tensor-parallel path: its KDA, MLA and indexer kernels would need splitting by head. It was not
+chunk's hand-offs take about 0.3% of its time by estimate. What limited prompts was the CPU lane, not the cards' links: see "Prompts". The model has no tensor-parallel path: its KDA, MLA and indexer kernels would need splitting by head. It was not
 built or measured. A card-to-card sum takes about 46 us on MI50 (docs/SPLIT_ENGINE.md), so two a layer cost about 4 ms a round. That leaves about 7 ms of the 11 ms a
 four-way split would save on dense GEMVs, an estimated +12% at best, and the CPU lane's time stays.
 
