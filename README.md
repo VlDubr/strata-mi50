@@ -9,14 +9,17 @@
 
 <p align="center">
   Qwen3.8-Flash-Next on four MI50 32 GB cards:<br>
-  <b>83 tok/s</b> for one user, <b>170 tok/s</b> in total for ten users at once, up to <b>262,144 tokens</b> of context.
+  <b>83 tok/s</b> for one user, <b>170 tok/s</b> in total for ten users at once, up to <b>262,144 tokens</b> of context.<br>
+  GLM-5.3-Flash (320B) on the same cards: <b>36 tok/s</b>, <b>131,072 tokens</b> of context, four conversations, pictures.
 </p>
 
 <p align="center">
   <a href="#highlights">Highlights</a> · <a href="#performance">Performance</a> ·
-  <a href="#quick-start"><b>Quick start</b></a> · <a href="#tuning-for-mi50">Tuning</a> ·
-  <a href="#documentation">Docs</a> · <a href="#project-lineage">Lineage</a>
+  <a href="#quick-start"><b>Quick start</b></a> · <a href="#glm-53-flash">GLM-5.3-Flash</a> ·
+  <a href="#tuning-for-mi50">Tuning</a> · <a href="#documentation">Docs</a> · <a href="#project-lineage">Lineage</a>
 </p>
+
+<p align="center"><b>English</b> · <a href="README.ru.md">Русский</a></p>
 
 <p align="center">
   <a href="https://github.com/Niko1221/Strata/releases/tag/v0.2.10"><img src="https://img.shields.io/badge/upstream-Strata_v0.2.10-0ab887" alt="Upstream Strata v0.2.10"></a>
@@ -52,7 +55,7 @@ architecture on ROCm 10, adds MI50-specific decode speed-ups that keep the outpu
   recorded in [docs/GFX906.md](docs/GFX906.md).
 - **Ready to deploy.** Dockerfile, launcher and a GPU clock service in [deploy/mi50/](deploy/mi50/).
 - **GLM-5.3-Flash too.** The 320B model runs on 4x MI50 at 36 tok/s decode with its multi-token head, more than three times llama.cpp
-  on the same cards, with pictures and four conversations at once. Design, deployment and limits: [docs/GLM5.md](docs/GLM5.md).
+  on the same cards, with pictures, tool calls and four conversations at once. [Numbers and steps](#glm-53-flash) are below.
 
 ## Performance
 
@@ -251,6 +254,87 @@ kept for its tests. Never set `HSA_OVERRIDE_GFX_VERSION`.
 
 </details>
 
+## GLM-5.3-Flash
+
+GLM-5.3-Flash (GGUF architecture `glm5-next`, 320B parameters, 288 experts) runs on Strata's DeepSeek engine path
+(`strata-dsv41`), built for gfx906. The model does not fit in 128 GB of VRAM: the most-used experts stay on the cards and the
+rest run on the CPU from RAM. Its image holds both engines, and only one model runs at a time.
+
+**4x MI50 32 GB, Unsloth UD-Q4_K_XL (199.7 GB), 2026-11-07.** AMD EPYC 7302, six DDR4-3200 DIMMs, 91 GB RAM, context 131,072,
+four conversations, multi-token head with two drafts, picture tower on. Sampled at the model card's settings, API rates.
+
+| | llama.cpp b11786 | Strata |
+| --- | ---: | ---: |
+| Decode, one answer | 10.8 tok/s | **36 tok/s** |
+| Decode, two answers at once, total | not measured | 31 tok/s |
+| Decode, four answers at once, total | not measured | 37 tok/s |
+| Prefill, 14K tokens | not measured | 78 tok/s |
+| 14K-token prompt with a new end, from a restore point | not measured | 10 s instead of 180 s |
+| Load | about 14 min | about 2 min |
+
+What works: the OpenAI and Anthropic APIs, streaming, tool calls, pictures, thinking off (`reasoning_effort: none`,
+`enable_thinking: false`, or Anthropic `thinking: disabled`), restore points. Against llama.cpp on the same weights, greedy
+tokens match until a near-tie of the top two tokens. With drafts on and off the tokens are the same. Conversations together give
+the same logits bit for bit as each alone.
+
+### Requirements
+
+| | |
+| --- | --- |
+| **GPUs** | 4x AMD Instinct MI50 32 GB |
+| **RAM** | tested with 91 GB: the model locks 76 GB and about 12 GB stay free |
+| **Disk** | 200 GB for the GGUF files; the pack adds about 6 MB, as it reads the GGUF files in place |
+| **Docker** | `--cap-add SYS_ADMIN`, which `run-glm5.sh` passes: `--ram-stripe` reads the frames of its pages |
+
+### Start it
+
+Build the [Qwen image](#1-build-the-image) first, then the GLM image over it. The tested image used the Qwen image with the
+picture readers as its base; `BASE` selects another one.
+
+```sh
+docker build --build-arg BASE=strata-mi50 -t strata-gfx906:0.2.10-mi50-glm5 -f deploy/mi50/Dockerfile.glm5 .
+```
+
+1. Put the GGUF files and `mmproj-BF16.gguf` in one folder, then write the pack with `tools/dsv41/pack_glm5.py`.
+2. Add an expert profile. Without one the CPU takes 33% of the expert picks instead of about 21%.
+3. Write `~/strata-data/config/glm5.json`. Do not name it `strata-*.json`, or the Qwen image's setup takes it.
+4. Run `deploy/mi50/run-glm5.sh`.
+
+[docs/GLM5.md](docs/GLM5.md#deployment) has the exact commands, the config and how to make the profile.
+
+The API is on the same port as Qwen, and the model's name is `glm-5.3-flash`:
+
+```sh
+curl http://<host>:8095/v1/chat/completions \
+  -H "Authorization: Bearer $STRATA_API_KEY" -H "Content-Type: application/json" \
+  -d '{"model": "glm-5.3-flash", "reasoning_effort": "none",
+       "messages": [{"role": "user", "content": "Hello!"}]}'
+```
+
+### Switch between the models
+
+Both models take every GPU and port 8095, so stop one before you start the other. Stopping GLM frees its 76 GB of RAM.
+
+```sh
+docker stop strata-mi50 && deploy/mi50/run-glm5.sh    # Qwen to GLM
+docker stop strata-glm5 && deploy/mi50/run.sh         # GLM to Qwen
+```
+
+`run-glm5.sh` refuses to start beside the Qwen container. `run.sh` has no such check: with GLM running, Qwen does not start
+because the port is taken.
+
+### Limits
+
+- **`--ram-stripe 33.5,65.5` fits one machine.** The numbers are where that machine's RAM regions end, in GiB. Find your own
+  bounds with the method in [docs/GLM5.md](docs/GLM5.md#deployment), or leave the switch out. The experts then read from the
+  page cache, at about 30 tok/s on this machine.
+- **Two answers at once are slower in total than one alone.** The head drafts only while one conversation is answering.
+- **Start other large workloads first.** While it loads, the model takes all the RAM it can for a moment. If the RAM is not
+  free, it falls back to the page cache.
+- **Prefill is slow:** the CPU's share of the experts limits it.
+- **No video or audio, no tensor parallel.** A fifth conversation takes the seat used longest ago, and the conversation that
+  leaves is read again from its first token.
+
 ## Tuning for MI50
 
 Each setting below was measured on the 4x MI50 machine of [Performance](#performance). Details and raw records are in
@@ -290,6 +374,8 @@ Upstream's other engine switches and their gfx906 status:
 - **A shell in the image.** Pass `--entrypoint sh` to `docker run`. The default entry point runs setup, and without
   the data volume it can start a full model download into an anonymous volume.
 - **Logs.** `docker logs strata-mi50` for the server, `~/strata-data/logs/strata-unsloth-ud-q5_k_xl.log` for the engine.
+- **GLM decodes at about 30 tok/s, not 36.** Its experts are in the page cache. Check the `--ram-stripe` line in
+  `~/strata-data/logs/strata-glm5.log`: it names the GiB in huge pages by region. Free the RAM and restart.
 - **gfx906 is rejected.** Setup needs `--backend hip --experimental-gfx906`; the container's entry point passes both.
   Do not spoof another GPU and do not install RDNA wheels.
 - **Anything else.** See upstream's [troubleshooting guide](docs/TROUBLESHOOTING.md). For a report, name the fork commit,
@@ -300,6 +386,7 @@ Upstream's other engine switches and their gfx906 status:
 | Document | What is in it |
 | --- | --- |
 | [docs/GFX906.md](docs/GFX906.md) | The fork's log: every upstream merge and its conflicts, every measurement, every decision |
+| [docs/GLM5.md](docs/GLM5.md) | GLM-5.3-Flash: design, deployment, tests, where the decode time goes |
 | [docs/gfx906-results/](docs/gfx906-results/) | Raw results and scripts behind the numbers |
 | [docs/BATCHING.md](docs/BATCHING.md) | Batch slots, slot groups and their switches |
 | [docs/MULTI_GPU.md](docs/MULTI_GPU.md) | Layer split across several GPUs |
@@ -330,8 +417,9 @@ flowchart LR
 ### Status and limits
 
 - **Validated:** MI50 32 GB with the upstream `STRATA_HIP_GFX906` text engine, Qwen3.8-Flash-Next, single and
-  multi-GPU layer split.
-- **Not validated:** MI60, other models on gfx906, upstream's DeepSeek-V4.1 engine (not built for gfx906).
+  multi-GPU layer split. GLM-5.3-Flash on 4x MI50 32 GB with `strata-dsv41`.
+- **Not validated:** MI60, other models on gfx906, the DeepSeek-V4.1 model itself (`strata-dsv41` now builds for gfx906 and
+  its unit tests pass there, but no DeepSeek model was run).
 - **Experimental:** the fork's HIP GPU image encoder (`--vision gpu`), not part of the Docker image; see
   [its limits](docs/GFX906.md#experimental-hip-vision-on-v0139).
 
@@ -340,8 +428,8 @@ flowchart LR
 Upstream Strata is by [Niko1221](https://github.com/Niko1221/Strata). The original gfx906 port is
 [webzone/strata-gfx906](https://github.com/webzone/strata-gfx906). [Qwen](https://huggingface.co/Qwen/Qwen3.8-Flash-Next)
 made the model; [Unsloth](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF) and
-[ISTA-DASLab](https://huggingface.co/ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF) made the GGUF quantizations. The
-engine uses [llama.cpp / ggml](https://github.com/ggml-org/llama.cpp); the image builds on
+[ISTA-DASLab](https://huggingface.co/ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF) made the GGUF quantizations. Unsloth also
+made the GLM-5.3-Flash GGUF. The engine uses [llama.cpp / ggml](https://github.com/ggml-org/llama.cpp); the image builds on
 [mixa3607/rocm-gfx906](https://hub.docker.com/r/mixa3607/rocm-gfx906). More acknowledgments:
 [upstream credits and licenses](docs/DETAILS.md#credits-and-licenses).
 
