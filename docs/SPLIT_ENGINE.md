@@ -71,6 +71,39 @@ failure, or with `FNX_PEER=0`, it uses the host-memory exchange for the whole ru
 `tests/split/test_split_engine.py`. `FNX_PF_RCCL=1` (off by default, needs the peer push) sums the prompt chunks through RCCL, which is loaded with `dlopen` and never linked: without
 `librccl.so.1`, or if its self-test fails, the engine says so in one line and keeps the host exchange (`tools/rccl_policy_test.cpp`). Numbers and open items: `phaseA-tests/sfnx/RESULTS-HIP.md`.
 
+## MI50 (gfx906)
+
+The engine runs on 4x MI50 32 GB with UD-Q5_K_XL. It is opt-in and has its own image: `deploy/mi50/Dockerfile.split`, `deploy/mi50/run-split.sh`, and
+`deploy/mi50/split-config.py`, which writes the config. The server starts the engine itself, because the Qwen image's setup would put its own engine back.
+
+What the port changes:
+
+- `hip/mma.h`: gfx906 has no matrix instructions. `fnx_mma_soft` keeps gfx12's layout, fetches rows and columns by shuffle and multiplies on `v_dot2_f32_f16`.
+  The self-test passes on every card.
+- `qsa.cuh`: `__match_any` is per wave, so each of the two 32-lane warps in a wave64 takes its own half.
+- Q6_K experts, which UD-Q5_K_XL has in layer 2: the decode kernels and `MmTile<GGML_TYPE_Q6_K>` for prompts. `strata_control/split_engine.py` still leaves Q6_K
+  out of Auto.
+- `hc.cuh`: every wave fences before the grid barrier, because gfx9's workgroup barrier does not wait for the other waves' stores to reach L2.
+
+The config's switches, each measured:
+
+| Switch | Why |
+| --- | --- |
+| `--spec 2` | 92 tok/s. `--spec 3`, 4 and 6 give 69, 74 and 73: windows over 3 rows take 37 ms a round instead of 25 |
+| `FNX_PF_RCCL=0` | RCCL fails in the warm-up: `ncclGroupEnd: unhandled cuda error`. The prompt sums go through host memory |
+| `FNX_PRECAP=0` | With captured batch windows, a prompt on several slots waited about 300 s on some starts, in `fnx_memop_wait` until its timeout. Off, none did in 6 starts. Why capture causes it is not known |
+| `FNX_RING_GRID=32` | The window sum in one pass: 92.5 to 93.9 tok/s |
+| `GPU_MAX_HW_QUEUES=8` | At 32, decode fell to 2 tok/s. Do not raise it |
+
+`FNX_HC_GRID` above 60 needs two blocks a CU. Their register limit spills: 76 tok/s, so a window keeps 60 blocks and takes the 80 shares in two turns. On this
+card `clock64` runs slowly enough that `fnx_memop_wait`'s 8e9 ticks are about 300 s, not the 4 s its comment says.
+
+Where a round of 25 ms goes (`rocprofv3`, 3 rows): `k_hc` 6.2 ms, the card-to-card sums 4.5 ms, experts 3.1 ms, attention 1.8 ms, the router 1.6 ms. `k_hc` is the same
+work on every card, so it does not shrink with more cards. Answers still differ slightly from run to run on some prompts; the cause is not found.
+
+P2P on this machine (`glm53/ref/p2p.cpp`): kernel stores into a peer's VRAM 12-24 GB/s with no wrong word, `hipMemcpyPeer` 11-22 GB/s with or without peer access
+enabled, kernel reads from a peer 4 GB/s, a flag round trip 3.4 us against 3.8 us through pinned host memory.
+
 ## Not proven
 
 No GeForce pair has been tested (there is none in the lab). Three and four NVIDIA cards, Windows and macOS, a 64 GB RAM PC

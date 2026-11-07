@@ -15,7 +15,7 @@
 
 <p align="center">
   <a href="#highlights">Highlights</a> · <a href="#performance">Performance</a> ·
-  <a href="#quick-start"><b>Quick start</b></a> · <a href="#glm-53-flash">GLM-5.3-Flash</a> ·
+  <a href="#quick-start"><b>Quick start</b></a> · <a href="#all-cards-split-tensor-parallel">All-cards split</a> · <a href="#glm-53-flash">GLM-5.3-Flash</a> ·
   <a href="#tuning-for-mi50">Tuning</a> · <a href="#documentation">Docs</a> · <a href="#project-lineage">Lineage</a>
 </p>
 
@@ -54,6 +54,8 @@ architecture on ROCm 10, adds MI50-specific decode speed-ups that keep the outpu
 - **Current with upstream.** Upstream releases are merged through v0.2.10. Every conflict, check and measurement is
   recorded in [docs/GFX906.md](docs/GFX906.md).
 - **Ready to deploy.** Dockerfile, launcher and a GPU clock service in [deploy/mi50/](deploy/mi50/).
+- **All cards on every layer.** A second engine for Qwen reaches 94-99 tok/s for one request over direct card-to-card stores.
+  [The trade-offs](#all-cards-split-tensor-parallel) are below.
 - **GLM-5.3-Flash too.** The 320B model runs on 4x MI50 at 36 tok/s decode with its multi-token head, more than three times llama.cpp
   on the same cards, with pictures, tool calls and four conversations at once. [Numbers and steps](#glm-53-flash) are below.
 
@@ -254,6 +256,44 @@ kept for its tests. Never set `HSA_OVERRIDE_GFX_VERSION`.
 
 </details>
 
+## All-cards split (tensor parallel)
+
+For Qwen3.8-Flash-Next there is a third way to run the model: `strata-split` gives every card a share of every layer, so all four cards
+read weights at once instead of one at a time. It answers one person faster than either profile above. The layer split still wins for
+many users and long contexts.
+
+**4x MI50 32 GB, UD-Q5_K_XL, 2026-11-07.** The layer split's rows for 4 and 10 requests are from [Performance](#performance); the rest were
+measured on this day with the fixed greedy prompts.
+
+| | Layer split, solo | Layer split, parallel | All-cards split |
+| --- | ---: | ---: | ---: |
+| Context per conversation | 131,072 | **262,144** | 131,072 |
+| Decode, 1 request | 86 tok/s | 63 tok/s | **94-99 tok/s** |
+| Decode, 4 at once, total | 78 tok/s | **119 tok/s** | 105-120 tok/s |
+| Decode, 8 at once, total | not measured | not measured | 120 tok/s |
+| Decode, 10 at once, total | 81 tok/s | **170 tok/s** | at most 8 slots |
+| Prefill, 17.7K tokens | **1,070 tok/s** | **1,070 tok/s** | 770-900 tok/s |
+| Load | about 3 min | about 3 min | about 1.5 min |
+
+Pictures work. On 17 checked prompts the answers were right as often as the layer split's, and 11 were identical to the character. Three
+fresh starts under load gave the same answers and no stall.
+
+```sh
+deploy/mi50/run.sh                                 # once: setup downloads the model and writes the config
+docker build --build-arg BASE=strata-mi50 -t strata-mi50-split -f deploy/mi50/Dockerfile.split .
+docker stop strata-mi50 && deploy/mi50/run-split.sh
+docker stop strata-split && deploy/mi50/run.sh     # back to the layer split
+```
+
+The first start writes `~/strata-data/config/split.json` from the Qwen config. The API, the port and the model name stay the same.
+
+**Limits.** All conversations share one K/V pool of 225,024 positions, so four full 131,072-token conversations do not fit at once. The
+image was tested with the picture-reader Qwen image as `BASE`. `FNX_PRECAP=0` in the config is required: without it, a prompt could wait
+about 5 minutes on several slots. [docs/SPLIT_ENGINE.md](docs/SPLIT_ENGINE.md#mi50-gfx906) has the details.
+
+**P2P.** The cards reach each other directly: 12-24 GB/s for stores into a peer's VRAM, with no wrong word. The split engine uses this for
+its sums. The layer split gains nothing from it: the hand-off between cards is not what limits it.
+
 ## GLM-5.3-Flash
 
 GLM-5.3-Flash (GGUF architecture `glm5-next`, 320B parameters, 288 experts) runs on Strata's DeepSeek engine path
@@ -388,6 +428,7 @@ Upstream's other engine switches and their gfx906 status:
 | [docs/GFX906.md](docs/GFX906.md) | The fork's log: every upstream merge and its conflicts, every measurement, every decision |
 | [docs/GLM5.md](docs/GLM5.md) | GLM-5.3-Flash: design, deployment, tests, where the decode time goes |
 | [docs/gfx906-results/](docs/gfx906-results/) | Raw results and scripts behind the numbers |
+| [docs/SPLIT_ENGINE.md](docs/SPLIT_ENGINE.md) | The all-cards split engine, MI50 section included |
 | [docs/BATCHING.md](docs/BATCHING.md) | Batch slots, slot groups and their switches |
 | [docs/MULTI_GPU.md](docs/MULTI_GPU.md) | Layer split across several GPUs |
 | [docs/AMD_HIP.md](docs/AMD_HIP.md) | Upstream's AMD scope |
@@ -420,6 +461,7 @@ flowchart LR
   multi-GPU layer split. GLM-5.3-Flash on 4x MI50 32 GB with `strata-dsv41`.
 - **Not validated:** MI60, other models on gfx906, the DeepSeek-V4.1 model itself (`strata-dsv41` now builds for gfx906 and
   its unit tests pass there, but no DeepSeek model was run).
+- **Experimental:** the all-cards split on MI50: one day of tests, no long soak.
 - **Experimental:** the fork's HIP GPU image encoder (`--vision gpu`), not part of the Docker image; see
   [its limits](docs/GFX906.md#experimental-hip-vision-on-v0139).
 

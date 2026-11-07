@@ -155,6 +155,11 @@ Settings measured on this machine:
 - `STRATA_DS4_RAM_SKIP_W` leaves out light CPU-lane picks. At 0.1 decode reaches 41 tok/s, but the top token changes in 17.5% of the rows of
   the reference texts (25% at 0.15). It is off.
 
+P2P and tensor parallel: `hipMemcpyPeer` between these cards runs at 11-22 GB/s without enabling peer access, so the prompt path's copies need no change, and a
+chunk's hand-offs take about 0.3% of its time by estimate. The model has no tensor-parallel path: its KDA, MLA and indexer kernels would need splitting by head. It was not
+built or measured. A card-to-card sum takes about 46 us on MI50 (docs/SPLIT_ENGINE.md), so two a layer cost about 4 ms a round. That leaves about 7 ms of the 11 ms a
+four-way split would save on dense GEMVs, an estimated +12% at best, and the CPU lane's time stays.
+
 ## Tests
 
 - `tests/test_glm5_pack.py`: the pack's name map and checks. No model.
