@@ -176,9 +176,86 @@ static int run(int n) {
     return 0;
 }
 
+// GLM-5.3's router (route_publish with sigmoid set) and gate against the host: 288 experts, 8 picks, the score + bias choosing,
+// the score alone weighing, a plan pointer a pick; with a request, the input rows and the seq at its end
+static void run_sigmoid() {
+    const int n = 288, k = 8, T = 3, D = 1024;
+    std::vector<float> lg((size_t) T * 1024, 0.0f), bias(n), x((size_t) T * D), W((size_t) n * D);
+    std::vector<unsigned long long> vram(n);
+    unsigned r = 12345;
+    auto rnd = [&]() {
+        r = r * 1664525u + 1013904223u;
+        return (float) (r >> 8) / (float) (1 << 24) - 0.5f;
+    };
+    for (auto& v : bias) v = rnd();
+    for (auto& v : x) v = rnd();
+    for (auto& v : W) v = rnd() * 0.1f;
+    for (int i = 0; i < n; ++i) vram[(size_t) i] = i % 3 == 0 ? 0ull : 0x1000ull + (unsigned long long) i;
+    float *d_lg, *d_bias, *d_x, *d_W, *d_w;
+    int* d_idx;
+    unsigned long long *d_vram, *d_plan;
+    CK(cudaMalloc(&d_lg, lg.size() * 4));
+    CK(cudaMalloc(&d_bias, n * 4));
+    CK(cudaMalloc(&d_x, x.size() * 4));
+    CK(cudaMalloc(&d_W, W.size() * 4));
+    CK(cudaMalloc(&d_w, (size_t) T * kPicks * 4));
+    CK(cudaMalloc(&d_idx, (size_t) T * kPicks * 4));
+    CK(cudaMalloc(&d_vram, n * 8));
+    CK(cudaMalloc(&d_plan, (size_t) T * kPicks * 8));
+    CK(cudaMemcpy(d_bias, bias.data(), n * 4, cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(d_x, x.data(), x.size() * 4, cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(d_W, W.data(), W.size() * 4, cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(d_vram, vram.data(), n * 8, cudaMemcpyHostToDevice));
+    CK(cudaMemset(d_lg, 0, lg.size() * 4));
+    gate_f32(d_W, d_x, n, D, T, d_lg, 1024, 0);
+    CK(cudaMemcpy(lg.data(), d_lg, lg.size() * 4, cudaMemcpyDeviceToHost));
+    double worst = 0;
+    for (int t = 0; t < T; ++t)
+        for (int e = 0; e < n; ++e) {
+            double a = 0;
+            for (int i = 0; i < D; ++i) a += (double) W[(size_t) e * D + i] * x[(size_t) t * D + i];
+            worst = std::max(worst, std::fabs(a - lg[(size_t) t * 1024 + e]));
+        }
+    check(worst < 1e-4, "gate_f32 against double sums");
+    Req* req = nullptr;
+    CK(cudaHostAlloc((void**) &req, sizeof(Req), cudaHostAllocMapped));
+    std::memset((void*) req, 0, sizeof(Req));
+    route_publish(d_lg, d_bias, n, k, T, 2.5f, d_vram, d_x, D, d_idx, d_w, d_plan, req, 77u, 0, nullptr, 0, 0, 0, 1);
+    CK(cudaDeviceSynchronize());
+    std::vector<int> gi((size_t) T * kPicks);
+    std::vector<float> gw((size_t) T * kPicks);
+    std::vector<unsigned long long> gp((size_t) T * kPicks);
+    CK(cudaMemcpy(gi.data(), d_idx, gi.size() * 4, cudaMemcpyDeviceToHost));
+    CK(cudaMemcpy(gw.data(), d_w, gw.size() * 4, cudaMemcpyDeviceToHost));
+    CK(cudaMemcpy(gp.data(), d_plan, gp.size() * 8, cudaMemcpyDeviceToHost));
+    bool picks = true, plan = true, published = req->seq == 77u && req->T == T, rows = true;
+    double ww = 0;
+    for (int t = 0; t < T; ++t) {
+        std::vector<int> o((size_t) n);
+        for (int i = 0; i < n; ++i) o[(size_t) i] = i;
+        auto sg = [&](int e) { return 1.0 / (1.0 + std::exp(-(double) lg[(size_t) t * 1024 + e])); };
+        std::sort(o.begin(), o.end(), [&](int a, int b) { return sg(a) + bias[(size_t) a] > sg(b) + bias[(size_t) b]; });
+        double sum = 0;
+        for (int i = 0; i < k; ++i) sum += sg(o[(size_t) i]);
+        for (int i = 0; i < k; ++i) {
+            const size_t at = (size_t) t * kPicks + (size_t) i;
+            picks = picks && gi[at] == o[(size_t) i] && req->ids[t][i] == o[(size_t) i];
+            plan = plan && gp[at] == vram[(size_t) o[(size_t) i]];
+            ww = std::max(ww, std::fabs(gw[at] - sg(o[(size_t) i]) / sum * 2.5));
+        }
+        for (int i = 0; i < D; ++i) rows = rows && req->x[t][i] == x[(size_t) t * D + i];
+    }
+    check(picks, "route_publish, sigmoid: the host's picks");
+    check(ww < 1e-5, "route_publish, sigmoid: the weights");
+    check(plan, "route_publish, sigmoid: the plan");
+    check(rows, "route_publish, sigmoid: the input rows in the request");
+    check(published, "route_publish, sigmoid: published");
+}
+
 int main() {
     for (int n : {384, 192})
         if (run(n) != 0) return 1;      // (a device error: the context is gone)
+    run_sigmoid();
     std::printf("%s\n", fails ? "ds4_route_guard_test: FAILED" : "ds4_route_guard_test: all ok");
     return fails ? 1 : 0;
 }
