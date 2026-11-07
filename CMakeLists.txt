@@ -1063,6 +1063,14 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
       # the i-quant experts (ds4_iq.cu) against ggml's own decode of the same blocks + a double reference, device and CPU
       # lane, for every type the device takes: the gate a new type (IQ2_XS ..) has to pass before the engine uses it
       set_source_files_properties(tests/dsv41/iq_expert_test.cpp PROPERTIES LANGUAGE ${_ds4_test_lang})
+      # GLM-5.3's experts on the device: the expert kernels' rate and a hash of their output.  usage: glm5_moe_bench [rows] [experts]
+      add_executable(glm5_moe_bench EXCLUDE_FROM_ALL tests/dsv41/glm5_moe_bench.cu src/dsv41/ds4_iq.cu src/dsv41/ds4_tq.cu)
+      target_include_directories(glm5_moe_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${_strata_gpu_include_directories}
+                                 ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ggml ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/cpu)
+      target_link_libraries(glm5_moe_bench PRIVATE strata_kernels_cpu ${_strata_gpu_runtime_target} Threads::Threads)
+      if(STRATA_ENABLE_HIP)
+        target_compile_options(glm5_moe_bench PRIVATE "$<$<COMPILE_LANGUAGE:HIP,CXX>:SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/include/strata/dsv41/hip_extra.h>")
+      endif()
       add_executable(ds4_iq_test tests/dsv41/iq_expert_test.cpp src/dsv41/ds4_iq.cu src/dsv41/ds4_iq_cpu.cpp
                      src/dsv41/ds4_gg_cpu.cpp src/dsv41/ds4_tq.cu src/dsv41/ds4_tq_cpu.cpp)
       target_include_directories(ds4_iq_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${_strata_gpu_include_directories}

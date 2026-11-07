@@ -145,6 +145,21 @@ __device__ __forceinline__ void q4k_scale(const uint8_t* q, int j, int& d, int& 
     }
 }
 
+// (q4k_scale from a block's three words of scales: three loads for up to four byte ones)
+__device__ __forceinline__ void q4k_scale_w(const uint8_t* b, int j, int& d, int& m) {
+    const uint32_t* w = (const uint32_t*) (b + 4);
+    const uint32_t w0 = w[0], w1 = w[1], w2 = w[2];
+    const int sh = 8 * (j & 3);
+    const uint32_t b0 = (w0 >> sh) & 255u, b1 = (w1 >> sh) & 255u, b2 = (w2 >> sh) & 255u;
+    if (j < 4) {
+        d = (int) (b0 & 63u);
+        m = (int) (b1 & 63u);
+    } else {
+        d = (int) ((b2 & 0xFu) | ((b0 >> 6) << 4));
+        m = (int) ((b2 >> 4) | ((b1 >> 6) << 4));
+    }
+}
+
 // a 32-value sub-block (kb: its index in the row) as 32 int8 codes and its scales: weight i = d s q_i - m, s and m of
 // its half (i < 16: s0, m0; else s1, m1)
 struct Sub {
@@ -298,16 +313,19 @@ __device__ __forceinline__ void decode_b(const uint8_t* __restrict__ b, int ib, 
         s.m0 = s.m1 = h2f(b + 2) * (float) m;
     } else if constexpr (T == kQ5_K) {   // d, dmin, scales[12], qh[32], qs[128]: weight = d sc (nibble + 16 hbit) - dmin m
         int sc, m;
-        q4k_scale(b + 4, ib, sc, m);
-        const uint8_t* qs = b + 48 + 32 * (ib >> 1);
-        const uint8_t* qh = b + 16;
+        q4k_scale_w(b, ib, sc, m);
+        const uint4* qs = (const uint4*) (b + 48 + 32 * (ib >> 1));   // (176-byte blocks in 16-byte aligned rows)
+        const uint4* qh = (const uint4*) (b + 16);
+        const uint4 q0 = qs[0], q1 = qs[1], h0 = qh[0], h1 = qh[1];
         const int sh = 4 * (ib & 1);
+        const uint32_t w[8] = {q0.x, q0.y, q0.z, q0.w, q1.x, q1.y, q1.z, q1.w};
+        const uint32_t hw[8] = {h0.x, h0.y, h0.z, h0.w, h1.x, h1.y, h1.z, h1.w};
 #pragma unroll
-        for (int t = 0; t < 8; ++t)
-            s.q[t] = (int) (((ld4(qs + 4 * t) >> sh) & 0x0f0f0f0fu) | (((ld4(qh + 4 * t) >> ib) & 0x01010101u) << 4));
+        for (int t = 0; t < 8; ++t) s.q[t] = (int) (((w[t] >> sh) & 0x0f0f0f0fu) | (((hw[t] >> ib) & 0x01010101u) << 4));
         s.s0 = s.s1 = sc;
-        s.d = h2f(b);
-        s.m0 = s.m1 = h2f(b + 2) * (float) m;
+        const uint32_t dm = ld4(b);
+        s.d = __half2float(__ushort_as_half((uint16_t) dm));
+        s.m0 = s.m1 = __half2float(__ushort_as_half((uint16_t) (dm >> 16))) * (float) m;
     } else if constexpr (T == kQ6_K) {   // ql[128], qh[64], scales int8[16], d: weight = d sc (q - 32), q 6 bits
         const int h = ib >> 2, quarter = ib & 3;
         const uint8_t* ql = b + 64 * h + (quarter & 1 ? 32 : 0);
