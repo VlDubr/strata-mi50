@@ -152,7 +152,8 @@ Settings measured on this machine:
   falls back to the page cache, at about 30 tok/s.
 - `--parallel 2` gains 2% in decode. `--reserve-mib 300` gains nothing measurable. Neither is deployed.
 - `--dspark-conf 0.3`, more CPU threads, the expert cache: no gain. The expert cache takes decode from 26 to 11 tok/s: each move goes through a bounce buffer, and the RAM is what is short.
-- `STRATA_DS4_RAM_SKIP_W` leaves out light CPU-lane picks and changes the answers. It is off.
+- `STRATA_DS4_RAM_SKIP_W` leaves out light CPU-lane picks. At 0.1 decode reaches 41 tok/s, but the top token changes in 17.5% of the rows of
+  the reference texts (25% at 0.15). It is off.
 
 ## Tests
 
