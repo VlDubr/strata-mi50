@@ -2099,6 +2099,7 @@ void moe_mm(bool down, const DW& A, size_t sa, const Job* jobs, const int* njobs
             else gu_q4k_launch(T, w, jobs, njobs, njobs_max, (const block_q8_1*) in, (float*) out, s);
             break;
         case T_Q5_K: moe_launch<GGML_TYPE_Q5_K>(down, w, jobs, njobs, njobs_max, in, (float*) out, s, T); break;
+        case T_Q6_K: moe_launch<GGML_TYPE_Q6_K>(down, w, jobs, njobs, njobs_max, in, (float*) out, s, T); break;
         case T_Q5_1: moe_launch<GGML_TYPE_Q5_1>(down, w, jobs, njobs, njobs_max, in, (float*) out, s, T); break;
         case T_Q4_0: moe_launch<GGML_TYPE_Q4_0>(down, w, jobs, njobs, njobs_max, in, (float*) out, s, T); break;
         case T_Q8_0: moe_launch<GGML_TYPE_Q8_0>(down, w, jobs, njobs, njobs_max, in, (float*) out, s, T); break;
@@ -2160,6 +2161,7 @@ void moe_mm_big(bool down, const DW& A, size_t sa, const BigJob* jobs, const int
             }
             break;
         case T_Q5_K: moe_launch_big<GGML_TYPE_Q5_K>(down, w, jobs, njobs, njobs_cap, in, (float*) out, s); break;
+        case T_Q6_K: moe_launch_big<GGML_TYPE_Q6_K>(down, w, jobs, njobs, njobs_cap, in, (float*) out, s); break;
         case T_Q5_1: moe_launch_big<GGML_TYPE_Q5_1>(down, w, jobs, njobs, njobs_cap, in, (float*) out, s); break;
         case T_Q4_0: moe_launch_big<GGML_TYPE_Q4_0>(down, w, jobs, njobs, njobs_cap, in, (float*) out, s); break;
         case T_Q8_0: moe_launch_big<GGML_TYPE_Q8_0>(down, w, jobs, njobs, njobs_cap, in, (float*) out, s); break;

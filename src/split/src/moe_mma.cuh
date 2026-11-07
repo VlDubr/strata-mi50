@@ -134,6 +134,56 @@ template <> struct MmTile<GGML_TYPE_Q5_K> {
     }
     __device__ __forceinline__ void put(int k0, int, __half* sw) const { mm_put_k<true>(hd, qv, hv, live, k0, sw); }
 };
+// Q6_K (210-byte blocks, so byte copies): a thread's 16 + 16 weights of the 64-weight group j. Groups 2n and 2n + 1 share half n's quant and high bytes: the even
+// group takes the low nibbles and high-bit pairs 0 and 2, the odd one the high nibbles and pairs 4 and 6. UD-Q5_K_XL has these in one layer, so this is plain.
+template <> struct MmTile<GGML_TYPE_Q6_K> {
+    uint8_t a[16], b[16], h[16];
+    float s0, s1;
+    bool live, odd;
+    __device__ __forceinline__ void fetch(const char* we, size_t row_a, int nrows, int row0, int k0, int) {
+        const int r = mm_kq_row(), i = mm_kq_part(), row = row0 + r;
+        const int j = (k0 % 256) / 64 + i / 2, l0 = 16 * (i % 2), half = j / 2;
+        odd = j % 2;
+        live = row < nrows;
+        if (live) {
+            const uint8_t* p = (const uint8_t*) we + (size_t) row * row_a + (size_t) (k0 / 256) * 210;
+            const uint8_t* ql = p + 64 * half + l0;
+            const uint8_t* qh = p + 128 + 32 * half + l0;
+            const int8_t* sc = reinterpret_cast<const int8_t*>(p + 192 + 8 * half) + i % 2 + 4 * odd;
+            __builtin_memcpy(a, ql, 16);
+            __builtin_memcpy(b, ql + 32, 16);
+            __builtin_memcpy(h, qh, 16);
+            uint16_t dh;
+            __builtin_memcpy(&dh, p + 208, 2);
+            const float d = __half2float(__ushort_as_half(dh));
+            s0 = d * sc[0];
+            s1 = d * sc[2];
+        }
+    }
+    __device__ __forceinline__ void put(int, int, __half* sw) const {
+        const int r = mm_kq_row(), i = mm_kq_part(), l0 = 16 * (i % 2);
+        __half2 lo[8], hi[8];
+#pragma unroll
+        for (int t = 0; t < 8; ++t) {
+            float v[4] = {0.f, 0.f, 0.f, 0.f};
+            if (live) {
+#pragma unroll
+                for (int e = 0; e < 2; ++e) {
+                    const int x = 2 * t + e;
+                    const int qa = (odd ? a[x] >> 4 : a[x] & 15) | (((h[x] >> (odd ? 4 : 0)) & 3) << 4);
+                    const int qb = (odd ? b[x] >> 4 : b[x] & 15) | (((h[x] >> (odd ? 6 : 2)) & 3) << 4);
+                    v[e] = s0 * (float) (qa - 32);
+                    v[2 + e] = s1 * (float) (qb - 32);
+                }
+            }
+            lo[t] = __floats2half2_rn(v[0], v[1]);
+            hi[t] = __floats2half2_rn(v[2], v[3]);
+        }
+        __half* dst = sw + r * MM_LD + (i / 2) * 64 + l0;
+        mm_store8(dst, lo);
+        mm_store8(dst + 32, hi);
+    }
+};
 template <> struct MmTile<GGML_TYPE_Q5_1> {
     uint2 v[3];
     bool live, item;
@@ -257,6 +307,8 @@ __device__ __forceinline__ mm_f8 mma_wmma12(const mm_h8& a, const mm_h8& b, cons
     return __builtin_amdgcn_wmma_f32_16x16x16_f16_w32(a, b, c);
 #elif defined(__GFX12__) || defined(__gfx1200__) || defined(__gfx1201__)
     return __builtin_amdgcn_wmma_f32_16x16x16_f16_w32_gfx12(a, b, c);
+#elif defined(__gfx906__)
+    return nvcuda::wmma::fnx_mma_soft(a, b, c);
 #else
     (void) a; (void) b;
     __builtin_trap();   // not a gfx12 device pass: the launcher never selects it

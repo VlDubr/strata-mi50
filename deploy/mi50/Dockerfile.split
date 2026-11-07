@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+#
+# Qwen3.8-Flash-Next on the all-cards split engine (strata-split-4) for 4x MI50: every card holds a share of every layer. Built over the
+# Qwen image, whose setup keeps its own engine; docs/SPLIT_ENGINE.md has the numbers and the limits.
+#
+# Build from the repository root:
+#   docker build --build-arg BASE=strata-mi50 -t strata-mi50-split -f deploy/mi50/Dockerfile.split .
+
+ARG BASE=strata-gfx906:0.2.10-mi50-vision
+FROM ${BASE}
+
+COPY . /tmp/src
+RUN cmake -S /tmp/src -B /tmp/b -G Ninja -DCMAKE_BUILD_TYPE=Release \
+        -DSTRATA_ENABLE_HIP=ON -DSTRATA_ENABLE_CUDA=OFF -DSTRATA_EXPERIMENTAL_GFX906=ON -DCMAKE_HIP_ARCHITECTURES=gfx906 \
+        -DSTRATA_BUILD_TESTS=OFF -DSTRATA_BUILD_SPLIT=ON -DSTRATA_SPLIT_CARDS=4 -DSTRATA_PORTABLE=ON \
+        -DCMAKE_C_COMPILER=/usr/bin/cc -DCMAKE_CXX_COMPILER=/usr/bin/c++ \
+        -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++ -DCMAKE_PREFIX_PATH=/opt/rocm \
+        -DSTRATA_GGML_DIR=/opt/strata/third_party/llama.cpp \
+    && cmake --build /tmp/b -j "$(nproc)" --target strata-split-4 \
+    && cp /tmp/b/src/split/strata-split-4 /opt/strata/engine/strata-split-4 \
+    && cp -r /tmp/src/serve/. /opt/strata/serve/ \
+    && cp /tmp/src/deploy/mi50/split-entry.sh /tmp/src/deploy/mi50/split-config.py /opt/strata/ \
+    && chmod 755 /opt/strata/split-entry.sh \
+    && rm -rf /tmp/src /tmp/b
+
+ENTRYPOINT ["/opt/strata/split-entry.sh"]

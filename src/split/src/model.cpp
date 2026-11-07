@@ -108,11 +108,11 @@ void check_cards() {
         // compute capability. Any other card would find no kernels
         {
             bool built = false;
-            for (const char* a : {"gfx1201", "gfx1200", "gfx1100", "gfx1101", "gfx1102", "gfx1103"})
-                if (std::strncmp(prop.gcnArchName, a, 7) == 0) built = true;
+            for (const char* a : {"gfx1201", "gfx1200", "gfx1100", "gfx1101", "gfx1102", "gfx1103", "gfx906"})
+                if (std::strncmp(prop.gcnArchName, a, std::strlen(a)) == 0) built = true;
             if (!built)
                 throw std::runtime_error("card " + std::to_string(dev) + " (" + prop.name + ") is " + prop.gcnArchName +
-                                         " and this build has kernels for gfx1201, gfx1200 and gfx1100..gfx1103 only");
+                                         " and this build has kernels for gfx1201, gfx1200, gfx1100..gfx1103 and gfx906 only");
         }
         (void) FNX_ARCH;
 #else
@@ -1240,7 +1240,7 @@ Mtp::~Mtp() { free_mtp_cards(cards); }
 // the cards (the app's rule, strata_control/split_engine.py, refuses it earlier; this is the same check for a start that skipped the rule). The
 // server then starts the normal layer split. Q2_0 is not listed: the Gguf has already repacked it to Q4_0.
 static void check_supported(const Gguf& g) {
-    const uint32_t ok[] = {T_Q4_K, T_Q5_K, T_Q5_1, T_Q8_0, T_Q4_0, T_IQ4_NL, T_IQ4_XS, T_IQ3_S, T_IQ3_XXS, T_IQ2_S};
+    const uint32_t ok[] = {T_Q4_K, T_Q5_K, T_Q6_K, T_Q5_1, T_Q8_0, T_Q4_0, T_IQ4_NL, T_IQ4_XS, T_IQ3_S, T_IQ3_XXS, T_IQ2_S};
     for (const auto& kv : g.tensors()) {
         const std::string& n = kv.first;
         if (n.find("_exps.weight") == std::string::npos || n.find("shexp") != std::string::npos) continue;

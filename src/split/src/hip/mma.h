@@ -44,6 +44,32 @@ __device__ __forceinline__ fnx_hab fnx_ld_ab(const __half* p) {
 #endif
 }
 
+#if defined(__gfx906__)
+// gfx906 has no matrix instructions: gfx12's layout, each lane's rows and columns fetched by shuffle, the products on v_dot2_f32_f16
+__device__ __forceinline__ fnx_f8 fnx_mma_soft(const fnx_hab& a, const fnx_hab& b, const fnx_f8& c) {
+    typedef _Float16 fnx_h2 __attribute__((ext_vector_type(2)));
+    union Ab { fnx_h8 v; int w[4]; } ua, ub;
+    ua.v = a;
+    ub.v = b;
+    const int l = threadIdx.x & 31, n = l & 15, r0 = 8 * (l >> 4);
+    fnx_f8 acc = c;
+#pragma unroll
+    for (int kk = 0; kk < 2; ++kk) {
+        int bw[4];
+#pragma unroll
+        for (int q = 0; q < 4; ++q) bw[q] = __shfl(ub.w[q], n + 16 * kk, 32);
+#pragma unroll
+        for (int i = 0; i < 8; ++i)
+#pragma unroll
+            for (int q = 0; q < 4; ++q) {
+                const int aw = __shfl(ua.w[q], r0 + i + 16 * kk, 32);
+                acc[i] = __builtin_amdgcn_fdot2(__builtin_bit_cast(fnx_h2, aw), __builtin_bit_cast(fnx_h2, bw[q]), acc[i], false);
+            }
+    }
+    return acc;
+}
+#endif
+
 template <typename Use, int M, int N, int K, typename T, typename Layout = void> struct fragment;
 template <typename L> struct fragment<matrix_a, 16, 16, 16, __half, L> { fnx_hab v; };
 template <typename L> struct fragment<matrix_b, 16, 16, 16, __half, L> { fnx_hab v; };
@@ -83,6 +109,8 @@ __device__ __forceinline__ void mma_sync(fragment<accumulator, 16, 16, 16, float
     d.v = __builtin_amdgcn_wmma_f32_16x16x16_f16_w32(a.v, b.v, c.v);
 #elif defined(__GFX12__) || defined(__gfx1200__) || defined(__gfx1201__)
     d.v = __builtin_amdgcn_wmma_f32_16x16x16_f16_w32_gfx12(a.v, b.v, c.v);
+#elif defined(__gfx906__)
+    d.v = fnx_mma_soft(a.v, b.v, c.v);
 #else
     (void) a; (void) b; (void) c; (void) d;
     __builtin_trap();   // not a gfx11 / gfx12 device pass (the host pass compiles this branch only)

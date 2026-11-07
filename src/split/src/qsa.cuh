@@ -237,7 +237,11 @@ __global__ void __launch_bounds__(QSA_SEL_THREADS) k_idx_select(const float* __r
             const bool in = j < nv && (k & mask) == prefix;
             const unsigned bin = in ? (k >> shift) & 255u : 256u;
 #if FNX_HIP
+#if defined(__gfx906__)   // (wave64: two of this code's warps a wave, each sees its own half)
+            const unsigned peers = (unsigned) (__match_any(bin) >> (tid & 32));
+#else
             const unsigned peers = (unsigned) __match_any_sync(0xffffffffull, bin);   // HIP wants a 64-bit mask (wave32: the high half is empty)
+#endif
 #else
             const unsigned peers = __match_any_sync(0xffffffffu, bin);
 #endif

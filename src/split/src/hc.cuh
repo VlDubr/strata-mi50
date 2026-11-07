@@ -71,6 +71,9 @@ __device__ __forceinline__ void q8_block(float v, int8_t* q, float* d) {
 // then 1 to 2 * g - 1 past the generation's start, as no block can pass the next barrier before this one does. A fence
 // waits for the thread's own loads too, and that thread loads no up weights
 __device__ __forceinline__ void grid_sync(unsigned* bar, unsigned* err, unsigned g) {
+#if defined(__gfx906__)
+    __threadfence();   // (gfx9's workgroup barrier does not wait for the other waves' stores to reach L2, and the blocks read them from there)
+#endif
     __syncthreads();
     if (threadIdx.x == blockDim.x - 1) {
         __threadfence();

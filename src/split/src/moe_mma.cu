@@ -59,6 +59,7 @@ void moe_mma(const DW& A, size_t sa, const BigJob* jobs, const int* njobs, int n
     switch (A.type) {
         case T_Q4_K: mma_launch<GGML_TYPE_Q4_K>(w, jobs, njobs, njobs_cap, x, out, s); break;
         case T_Q5_K: mma_launch<GGML_TYPE_Q5_K>(w, jobs, njobs, njobs_cap, x, out, s); break;
+        case T_Q6_K: mma_launch<GGML_TYPE_Q6_K>(w, jobs, njobs, njobs_cap, x, out, s); break;
         case T_Q5_1: mma_launch<GGML_TYPE_Q5_1>(w, jobs, njobs, njobs_cap, x, out, s); break;
         case T_Q8_0: mma_launch<GGML_TYPE_Q8_0>(w, jobs, njobs, njobs_cap, x, out, s); break;
         case T_Q4_0: mma_launch<GGML_TYPE_Q4_0>(w, jobs, njobs, njobs_cap, x, out, s); break;
