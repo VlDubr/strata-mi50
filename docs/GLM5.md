@@ -18,7 +18,7 @@ striped over the RAM's regions. The speeds are API rates over six chat answers o
 | Prefill, 14K tokens of C++ | not measured | 77 tok/s | not measured |
 | Prefill, 2647 tokens of documentation | 74 tok/s | not measured | 145 tok/s |
 | Prefill, 16.7K and 27.9K tokens of C++ | not measured | not measured | 99 and 108 tok/s |
-| Load | about 14 min | about 4 min | about 2 min |
+| Load | about 14 min | about 2 min | about 2 min |
 
 The four conversations, the head and the tower take VRAM from the experts: 4950 experts on the CPU lane instead of about 4100.
 That is what slows prefill. With two conversations the 14K prompt reads at 84 tok/s, and chat decode gains 2%.
