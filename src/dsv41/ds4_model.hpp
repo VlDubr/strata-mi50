@@ -28,6 +28,7 @@ struct Options {
     int64_t max_context = 32768;
     std::vector<int> gpus;            // empty: every visible GPU
     int64_t reserve_mib = 600;        // VRAM left free on each GPU
+    int prompt_ring = 0;              // --prompt-ring N: GLM-5.3 prompts: VRAM slots a GPU for the CPU lane's experts (needs --ram-stripe); 0: the lane computes them
     std::string ram_stripe;           // --ram-stripe A,B: where the RAM's regions end, in GiB; the CPU lane's experts striped over them
     bool vram_experts_auto = true;    // (Metal: no --vram-experts given: the share the anonymous-memory cap leaves - metal_expert_cap)
     double vram_experts = 1.0;        // the share of the expert budget to use (tests: less, so the CPU lane works)

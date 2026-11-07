@@ -1216,12 +1216,28 @@ struct Model::Impl {
         double last_pred = 0;                                          // its prediction (s, before its k)
     } pm;
     static constexpr int kWarmRows = 32;     // (warm_after: the run's last rows whose picks it reads ahead)
-    static constexpr int kGlmChunk = 256;   // GLM-5.3: a prompt's rows through a layer at once (glm5_chunk)
+    static constexpr int kGlmChunk = 1024;   // GLM-5.3: a prompt's rows through a layer at once at most (glm5_chunk)
+    static constexpr int kGlmChunkLane = 256;   // ... without --prompt-ring: more gains the CPU lane nothing
     static constexpr int kGlmDrafts = 3;    // ... and the drafts block 45 makes a round at most
     static constexpr int kMtpRing = 64;     // ... the final hidden rows a conversation keeps for block 45, by position
     float* mtp_ring = nullptr;              // (the head's device, the bound conversation's)
     int64_t mtp_fill = 0;                   // block 45's caches hold the positions before this one
     std::mutex g5_lane;   // (the CPU lane's buffers are one: a device's experts at a time)
+    // a prompt's CPU-lane experts through the GPU (--prompt-ring): copied from the striped RAM into a ring of VRAM slots on a stream of their
+    // own, a batch ahead of the kernels.  A copy costs the same whatever the rows, so the bigger a chunk the better, up to the pipeline's fill
+    struct G5Ring {
+        uint8_t* mem = nullptr;
+        size_t stride = 0;
+        int n = 0, at = 0;
+        cudaStream_t cs = nullptr;
+        std::vector<cudaEvent_t> ready, freed;
+        std::vector<char> used;
+        std::vector<std::array<x3::Mat, 3>> m;
+    };
+    G5Ring g5_ring[8];
+    uint8_t* stripe_base = nullptr;
+    size_t stripe_bytes = 0;
+    double g5_prof[8][5] = {};   // DS4_GLM_LOG: a device's ms in a prompt: attention, its GPU experts, the lane's wait, the lane, the stage
     static constexpr int kPickMax = 2048;   // (from here on the flow: windows' work grows with every 16 tokens)
     static constexpr double kPickRes = 0.9;  // (this share of the CPU-lane experts in RAM: windows if predicted faster)
     std::atomic<int> lm_layers{0};           // (layer-major) the layers every chunk went through
@@ -3947,6 +3963,7 @@ struct Model::Impl {
         }
         if (o.verbose) std::fprintf(stderr, "ds4: loaded in %.1f s\n%s", (now_ms() - t0) / 1000.0, describe().c_str());
         if (chunk > 0) (void) pick_flow_min();   // (the startup line)
+        if (g.glm5) g5_stream_setup();
         reset();
         start_warm();
         return true;
@@ -5979,6 +5996,8 @@ struct Model::Impl {
             } else {
                 for (Layer& l : L)
                     if (l.lay.fmt == gg::kFmtMXFP4) l.ram.assign((size_t) l.n_exp, -1);
+                stripe_base = base;
+                stripe_bytes = total;
                 ram_slots.resize(warm.size());
                 size_t off = 0;
                 for (size_t i = 0; i < warm.size(); ++i) {
@@ -12910,7 +12929,7 @@ struct Model::Impl {
     bool feed_windows(const int* tokens, int n, int logits_rows, std::string& err) {
         logits_all = false;
         if (g.glm5 && n >= 2 * kWin) {   // (layer by layer in chunks: an expert read once for the chunk's tokens)
-            const int tail = n % kGlmChunk < 2 * kWin ? n % kGlmChunk : 0;   // (a short end goes in windows: a chunk's cost is by layer)
+            const int C = glm5_chunk(n), tail = n % C < 2 * kWin ? n % C : 0;   // (a short end goes in windows: a chunk's cost is by layer)
             if (!glm5_chunks(tokens, n - tail, tail == 0 ? logits_rows : 0, err)) return false;
             if (tail == 0) return true;
             tokens += n - tail;
@@ -14619,6 +14638,45 @@ struct Model::Impl {
     }
     // GLM-5.3's routed experts for a chunk: picks in d.g_cidx / g_cw, rows in d.g_cx, the sum into d.g_cm.  The VRAM experts
     // go on the stream 128 rows at a time, then the CPU lane takes its own, each expert once for all its rows
+    void g5_stream_setup() {
+        const int want = o.prompt_ring;
+        if (want < 4) return;
+        if (stripe_base == nullptr || copy_mode) {
+            std::fprintf(stderr, "ds4: --prompt-ring needs the experts striped in RAM (--ram-stripe): prompts stay on the CPU lane\n");
+            return;
+        }
+        const double t0 = now_ms();
+        if (cudaHostRegister(stripe_base, stripe_bytes, cudaHostRegisterPortable) != cudaSuccess) {
+            std::fprintf(stderr, "ds4: the striped experts cannot be pinned for the GPUs: %s; prompts stay on the CPU lane\n", cudaGetErrorString(cudaGetLastError()));
+            return;
+        }
+        size_t blob = 0;
+        for (const Layer& l : L) blob = std::max<size_t>(blob, l.blob);
+        const size_t stride = (blob + 4095) & ~(size_t) 4095;
+        for (Dev& d : devs) {
+            cudaSetDevice(d.id);
+            size_t fr = 0, tot = 0;
+            mem_info(&fr, &tot);
+            G5Ring& r = g5_ring[d.id & 7];
+            const int n = (int) std::min<size_t>((size_t) want & ~(size_t) 1, fr > (96u << 20) ? (fr - (96u << 20)) / stride : 0) & ~1;
+            if (n < 4 || cudaMalloc(&r.mem, (size_t) n * stride) != cudaSuccess || cudaStreamCreateWithFlags(&r.cs, cudaStreamNonBlocking) != cudaSuccess) {
+                std::fprintf(stderr, "ds4: no room for GPU %d's expert ring (%zu MiB free)\n", d.id, fr >> 20);
+                continue;
+            }
+            r.stride = stride;
+            r.ready.resize((size_t) n);
+            r.freed.resize((size_t) n);
+            r.used.assign((size_t) n, 0);
+            r.m.resize((size_t) n);
+            for (int i = 0; i < n; ++i) {
+                cudaEventCreateWithFlags(&r.ready[(size_t) i], cudaEventDisableTiming);
+                cudaEventCreateWithFlags(&r.freed[(size_t) i], cudaEventDisableTiming);
+            }
+            r.n = n;
+            std::fprintf(stderr, "ds4: GPU %d: a ring of %d experts for prompts, %.0f MiB\n", d.id, n, (double) n * stride / 1048576.0);
+        }
+        std::fprintf(stderr, "ds4: %.1f GB of striped experts pinned for the GPUs in %.1f s\n", stripe_bytes / 1e9, (now_ms() - t0) / 1000.0);
+    }
     bool glm5_moe_chunk(Layer& l, Dev& d, int T, std::string& err) {
         cudaStream_t s = d.st;
         const int D = g.dim, K = l.k_exp;
@@ -14627,7 +14685,11 @@ struct Model::Impl {
         CK(cudaMemcpyAsync(h_cidx, d.g_cidx, (size_t) T * kPicks * 4, cudaMemcpyDeviceToHost, s));
         CK(cudaMemcpyAsync(h_cw, d.g_cw, (size_t) T * kPicks * 4, cudaMemcpyDeviceToHost, s));
         CK(cudaMemcpyAsync(h_cx, d.g_cx, (size_t) T * D * 4, cudaMemcpyDeviceToHost, s));
+        const double tq0 = now_ms();
         CK(cudaStreamSynchronize(s));
+        double* gp = g5_prof[d.id & 7];
+        const double tq1 = now_ms();
+        gp[0] += tq1 - tq0;
         std::vector<std::vector<std::pair<int, float>>> per((size_t) l.n_exp);
         uint32_t* pr = prof.data() + (size_t) l.il * g.n_exp;
         for (int t = 0; t < T; ++t)
@@ -14645,14 +14707,15 @@ struct Model::Impl {
             }
         Gather ga;
         glm5::RowsAdd ra;
-        int vex[128], vrow[128], vn[128], nv = 0, nrows = 0;
+        int vrow[128], vn[128], nv = 0, nrows = 0;
+        const x3::Mat* vmat[128];
         auto flush = [&]() -> bool {
             if (nrows == 0) return true;
             gather_rows(d.g_cx, ga, nrows, D, d.xe, s);
             x3::MvJob j[2 * 128];
             int nj = 0;
             for (int i = 0; i < nv; ++i) {
-                const auto& vm = l.vm[(size_t) vex[i]];
+                const x3::Mat* vm = vmat[i];
                 j[nj++] = job(vm[0], d.xe + (size_t) vrow[i] * D, d.xg + (size_t) vrow[i] * g.ff, vn[i], D, g.ff);
                 j[nj++] = job(vm[1], d.xe + (size_t) vrow[i] * D, d.xu + (size_t) vrow[i] * g.ff, vn[i], D, g.ff);
             }
@@ -14660,44 +14723,108 @@ struct Model::Impl {
             swiglu(d.xg, d.xu, nrows * g.ff, g.lim, d.xhh, s);
             nj = 0;
             for (int i = 0; i < nv; ++i)
-                j[nj++] = job(l.vm[(size_t) vex[i]][2], d.xhh + (size_t) vrow[i] * g.ff, d.ed + (size_t) vrow[i] * D, vn[i], g.ff, D);
+                j[nj++] = job(vmat[i][2], d.xhh + (size_t) vrow[i] * g.ff, d.ed + (size_t) vrow[i] * D, vn[i], g.ff, D);
             if (!mv_n(d, j, nj, err)) return false;
             glm5::rows_add(d.ed, ra, nrows, D, d.g_cm, s);
             nv = nrows = 0;
             return true;
         };
+        // an expert's rows into the batch, at most kMaxMvCols a job
+        auto add_rows = [&](const x3::Mat* m, const std::vector<std::pair<int, float>>& pe) -> bool {
+            for (size_t a = 0; a < pe.size(); a += (size_t) x3::kMaxMvCols) {
+                const int n = (int) std::min<size_t>((size_t) x3::kMaxMvCols, pe.size() - a);
+                if (nrows + n > 128 && !flush()) return false;
+                vmat[nv] = m;
+                vrow[nv] = nrows;
+                vn[nv++] = n;
+                for (int i = 0; i < n; ++i, ++nrows) {
+                    ga.src[nrows] = ra.tok[nrows] = pe[a + (size_t) i].first;
+                    ra.w[nrows] = pe[a + (size_t) i].second;
+                }
+            }
+            return true;
+        };
+        // the experts the ring takes, in batches of half of it; two batches' copies start before the resident experts' kernels
+        G5Ring& rg = g5_ring[d.id & 7];
+        std::vector<int> sexp;
+        if (rg.n > 0 && T > kGlmChunkLane && !l.ram.empty())   // (256 rows or fewer: the lane is as fast, and a prompt that short has no pipeline to fill)
+            for (int e = 0; e < l.n_exp; ++e)
+                if (l.slot[(size_t) e] < 0 && l.ram[(size_t) e] >= 0 && !per[(size_t) e].empty()) sexp.push_back(e);
+        std::vector<char> streamed((size_t) l.n_exp, 0);
+        for (int e : sexp) streamed[(size_t) e] = 1;
+        const int SB = rg.n / 2, nb = SB > 0 ? ((int) sexp.size() + SB - 1) / SB : 0;
+        std::vector<int> bslot(sexp.size(), 0);
+        auto issue = [&](int b) -> bool {
+            const int a = b * SB, z = std::min((int) sexp.size(), a + SB);
+            int sl = 0;
+            for (int i = a; i < z; ++i) {
+                const int e = sexp[(size_t) i];
+                sl = rg.at;
+                rg.at = (rg.at + 1) % rg.n;
+                bslot[(size_t) i] = sl;
+                if (rg.used[(size_t) sl]) CK(cudaStreamWaitEvent(rg.cs, rg.freed[(size_t) sl], 0));
+                uint8_t* dst = rg.mem + (size_t) sl * rg.stride;
+                CK(cudaMemcpyAsync(dst, ram_slots[(size_t) l.ram[(size_t) e]], l.blob, cudaMemcpyHostToDevice, rg.cs));
+                for (int r = 0; r < 3; ++r) {
+                    x3::Mat& m = rg.m[(size_t) sl][(size_t) r];
+                    m = x3::Mat{};
+                    m.K = gg::expert_type(l.lay, r);
+                    m.fmt = m.K == gg::kTypeMXFP4 ? gg::kFmtMXFP4 : gg::kFmtGG;
+                    m.raw = dst + l.lay.trellis[r];
+                    m.k = r < 2 ? g.dim : g.ff;
+                    m.n = r < 2 ? g.ff : g.dim;
+                }
+            }
+            CK(cudaEventRecord(rg.ready[(size_t) sl], rg.cs));
+            return true;
+        };
+        for (int b = 0; b < std::min(nb, 2); ++b)
+            if (!issue(b)) return false;
         std::vector<Ent> ents;
         std::vector<std::pair<int, float>> slots;
         for (int e = 0; e < l.n_exp; ++e) {
             const auto& pe = per[(size_t) e];
-            if (pe.empty()) continue;
+            if (pe.empty() || streamed[(size_t) e]) continue;
             const bool on_gpu = l.slot[(size_t) e] >= 0;
-            const int cap = on_gpu ? x3::kMaxMvCols : ent_cap(l);
+            if (on_gpu) {
+                if (!add_rows(l.vm[(size_t) e].data(), pe)) return false;
+                continue;
+            }
+            const int cap = ent_cap(l);
             for (size_t a = 0; a < pe.size(); a += (size_t) cap) {
                 const int n = (int) std::min<size_t>((size_t) cap, pe.size() - a);
-                if (on_gpu) {
-                    if (nrows + n > 128 && !flush()) return false;
-                    vex[nv] = e;
-                    vrow[nv] = nrows;
-                    vn[nv++] = n;
-                    for (int i = 0; i < n; ++i, ++nrows) {
-                        ga.src[nrows] = ra.tok[nrows] = pe[a + (size_t) i].first;
-                        ra.w[nrows] = pe[a + (size_t) i].second;
-                    }
-                } else {
-                    Ent en;
-                    en.e = e;
-                    en.n = n;
-                    for (int i = 0; i < n; ++i) {
-                        en.tok[i] = pe[a + (size_t) i].first;
-                        slots.push_back(pe[a + (size_t) i]);
-                    }
-                    ents.push_back(en);
+                Ent en;
+                en.e = e;
+                en.n = n;
+                for (int i = 0; i < n; ++i) {
+                    en.tok[i] = pe[a + (size_t) i].first;
+                    slots.push_back(pe[a + (size_t) i]);
                 }
+                ents.push_back(en);
             }
         }
         if (!flush()) return false;
+        for (int b = 0; b < nb; ++b) {
+            const int a = b * SB, z = std::min((int) sexp.size(), a + SB);
+            CK(cudaStreamWaitEvent(s, rg.ready[(size_t) bslot[(size_t) z - 1]], 0));
+            for (int i = a; i < z; ++i) {
+                if (!add_rows(rg.m[(size_t) bslot[(size_t) i]].data(), per[(size_t) sexp[(size_t) i]])) return false;
+            }
+            if (!flush()) return false;
+            for (int i = a; i < z; ++i) {
+                const int sl = bslot[(size_t) i];
+                CK(cudaEventRecord(rg.freed[(size_t) sl], s));
+                rg.used[(size_t) sl] = 1;
+            }
+            if (b + 2 < nb && !issue(b + 2)) return false;
+        }
+        static const bool gsync = std::getenv("DS4_GLM_PROF") != nullptr;
+        const double tq2 = now_ms();
+        if (gsync) CK(cudaStreamSynchronize(s));
+        const double tq3 = now_ms();
+        gp[1] += tq3 - tq2;
         std::lock_guard<std::mutex> lane(g5_lane);
+        gp[2] += now_ms() - tq3;
         st.experts += (int64_t) T * K;
         if (ents.empty()) return true;
         st.cpu_experts += (int64_t) slots.size();
@@ -14723,6 +14850,7 @@ struct Model::Impl {
             base += (size_t) n;
         }
         st.cpu_ms += now_ms() - tc;
+        gp[3] += now_ms() - tc;
         CK(cudaMemcpyAsync(d.g_cpu, h_cpart, (size_t) T * D * 4, cudaMemcpyHostToDevice, s));
         glm5::add(d.g_cpu, d.g_cm, (size_t) T * D, s);
         return true;
@@ -14780,6 +14908,16 @@ struct Model::Impl {
         CK(cudaStreamSynchronize(s));
         return true;
     }
+    // a prompt's chunk: with the ring, enough chunks to fill the pipeline before a copy's cost matters
+    bool glm5_ring_on() const {
+        for (const G5Ring& r : g5_ring)
+            if (r.n > 0) return true;
+        return false;
+    }
+    int glm5_chunk(int n) const {
+        if (!glm5_ring_on()) return kGlmChunkLane;
+        return n >= 4096 ? kGlmChunk : n >= 1024 ? kGlmChunk / 2 : kGlmChunk / 4;
+    }
     bool glm5_chunks(const int* tk, int n, int logits_rows, std::string& err) {
         if (pos + n > o.max_context) {
             err = "the context is full";
@@ -14803,7 +14941,7 @@ struct Model::Impl {
         for (int il = 0; il < g.nl; ++il)
             if (stages.empty() || stages.back().di != L[(size_t) il].dev) stages.push_back({L[(size_t) il].dev, il, il + 1});
             else stages.back().il1 = il + 1;
-        const int NS = (int) stages.size(), NC = (n + kGlmChunk - 1) / kGlmChunk;
+        const int NS = (int) stages.size(), CH = glm5_chunk(n), NC = (n + CH - 1) / CH;
         const size_t row = (size_t) g.hc * g.dim;
         // done[s]: chunks stage s finished; taken[s]: chunks the next stage has copied out of stage s
         std::vector<int> done((size_t) NS, 0), taken((size_t) NS, 0);
@@ -14819,7 +14957,7 @@ struct Model::Impl {
                 Dev& d = devs[(size_t) st_.di];
                 cudaSetDevice(d.id);
                 for (int k = 0; k < NC && !failed.load(); ++k) {
-                    const int a = k * kGlmChunk, T = std::min(kGlmChunk, n - a);
+                    const int a = k * CH, T = std::min(CH, n - a);
                     {
                         std::unique_lock<std::mutex> lk(mu);
                         cv.wait(lk, [&] { return failed.load() || ((si == 0 || done[(size_t) si - 1] > k) && (si + 1 == NS || taken[(size_t) si] >= k)); });
@@ -14839,7 +14977,10 @@ struct Model::Impl {
                         cv.notify_all();
                     }
                     std::string e;
-                    if (!glm5_chunk_stage(st_.di, st_.il0, st_.il1, p0 + a, tk + a, T, e)) {
+                    const double ts = now_ms();
+                    const bool stage_ok = glm5_chunk_stage(st_.di, st_.il0, st_.il1, p0 + a, tk + a, T, e);
+                    g5_prof[d.id & 7][4] += now_ms() - ts;
+                    if (!stage_ok) {
                         errs[(size_t) si] = e;
                         failed.store(true);
                         cv.notify_all();
@@ -14857,9 +14998,16 @@ struct Model::Impl {
                 return false;
             }
         st.layer_ms += now_ms() - tl;
-        if (std::getenv("DS4_GLM_LOG") != nullptr)
+        if (std::getenv("DS4_GLM_LOG") != nullptr) {
             std::fprintf(stderr, "glm5 prompt: %d rows at %lld in %d chunks over %d GPUs: %.0f ms\n", n, (long long) p0, NC, NS, now_ms() - tl);
-        const int cur = stages.back().di, last = n - (NC - 1) * kGlmChunk;
+            for (int i = 0; i < 8; ++i)
+                if (g5_prof[i][4] > 0)
+                    std::fprintf(stderr, "  gpu %d: stage %.0f ms; attention %.0f, GPU experts %.0f, lane wait %.0f, lane %.0f\n", i, g5_prof[i][4],
+                                 g5_prof[i][0], g5_prof[i][1], g5_prof[i][2], g5_prof[i][3]);
+        }
+        for (auto& row_ : g5_prof)
+            for (double& v : row_) v = 0;
+        const int cur = stages.back().di, last = n - (NC - 1) * CH;
         Dev& d = devs[(size_t) cur];
         cudaSetDevice(d.id);
         n_logits = std::min(std::min(logits_rows, last), kWin);
@@ -15872,7 +16020,7 @@ bool Model::marks_inside(int n, const std::vector<int64_t>& rel) const {
     return on && p.inner_cost(n, rel) <= p.chunk;
 }
 int Model::feed_unit() const {
-    if (p_->g.glm5) return 16 * Impl::kGlmChunk;   // (a Stop is heard between two of these; each refills the GPUs' pipeline)
+    if (p_->g.glm5) return 16 * p_->glm5_chunk(1 << 20);   // (a Stop is heard between two of these; each refills the GPUs' pipeline)
     return p_->chunk > 0 ? std::max(p_->chunk, (int) p_->o.max_context) : kWin;
 }
 void Model::set_progress(std::function<void(int64_t)> f) { p_->progress = std::move(f); }
@@ -15935,7 +16083,7 @@ bool Model::step_multi_spec(const int* seqs, const int* const* toks, const int* 
 }
 bool Model::can_draft_multi(const int* seqs, int n) const { return p_->can_draft_multi(seqs, n); }
 bool Model::spec_together() const { return !p_->g.glm5; }
-int Model::read_piece_rows() const { return p_->g.glm5 ? Impl::kGlmChunk : 0; }
+int Model::read_piece_rows() const { return p_->g.glm5 ? p_->glm5_chunk(1 << 20) : 0; }
 bool Model::draft_multi(const int* seqs, const int* ys, int n, std::vector<std::vector<int>>& d,
                         std::vector<std::vector<float>>& c, std::string& err) {
     return p_->draft_multi(seqs, ys, n, d, c, err);

@@ -2538,6 +2538,7 @@ int main(int argc, char** argv) {
         } else if (a == "--max-context") o.max_context = std::atoll(val("--max-context").c_str());
         else if (a == "--reserve-mib") o.reserve_mib = std::atoll(val("--reserve-mib").c_str());
         else if (a == "--ram-stripe") o.ram_stripe = val("--ram-stripe");
+        else if (a == "--prompt-ring") o.prompt_ring = std::atoi(val("--prompt-ring").c_str());
         else if (a == "--vram-experts") { o.vram_experts = std::atof(val("--vram-experts").c_str()); o.vram_experts_auto = false; }
         else if (a == "--cpu-threads") o.cpu_threads = std::atoi(val("--cpu-threads").c_str());
         else if (a == "--expert-profile") o.profile = val("--expert-profile");

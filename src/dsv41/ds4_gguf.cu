@@ -451,52 +451,75 @@ __device__ __forceinline__ float q8_words_g(const uint8_t* __restrict__ p, int* 
     return __half2float(__ushort_as_half((uint16_t) (p[0] | p[1] << 8)));
 }
 
+template <int NC, bool ST>
+inline constexpr int kQ8Rows = (ST && NC >= 8) ? 2 : 1;
 // grid (max rows / 8, jobs): a Q8_0 matrix's rows against the jobs' int8 activations (q8_quant's: activation c of job
 // j at xq + c k, its scales at xd + c k / 32) - a warp a row, a lane a block a step, the blocks staged (ST) or read
 template <int NC, bool ST>
 __global__ void __launch_bounds__(kThreads) q8_mv_kernel(const BfJobs J) {
-    __shared__ __align__(16) uint32_t stage[kWarps][32 * kQ8Bytes / 4];
+    // (RW rows a warp: a window's activations come through L1 once for them; a row's sum stays as it was)
+    constexpr int RW = kQ8Rows<NC, ST>;
+    __shared__ __align__(16) uint32_t stage[kWarps * RW][32 * kQ8Bytes / 4];
     const BfJob& b = J.j[blockIdx.y];
-    const int row = blockIdx.x * kWarps + (threadIdx.x >> 5), lane = threadIdx.x & 31;
-    if (row >= b.n) return;
-    const uint8_t* w = (const uint8_t*) b.w + (size_t) row * b.ld;
-    const int nb = b.k / 32;
-    float acc[NC];
+    const int warp = threadIdx.x >> 5, row0 = (blockIdx.x * kWarps + warp) * RW, lane = threadIdx.x & 31;
+    if (row0 >= b.n) return;
+    const uint8_t* w[RW];
 #pragma unroll
-    for (int c = 0; c < NC; ++c) acc[c] = 0.0f;
-    Fetch<kQ8Bytes> F;
-    if (ST) F.load(w, 0, min(32, nb));
+    for (int r = 0; r < RW; ++r) w[r] = (const uint8_t*) b.w + (size_t) min(row0 + r, b.n - 1) * b.ld;
+    const int nb = b.k / 32;
+    float acc[RW][NC];
+#pragma unroll
+    for (int r = 0; r < RW; ++r)
+#pragma unroll
+        for (int c = 0; c < NC; ++c) acc[r][c] = 0.0f;
+    Fetch<kQ8Bytes> F[RW];
+    if (ST)
+#pragma unroll
+        for (int r = 0; r < RW; ++r) F[r].load(w[r], 0, min(32, nb));
     for (int b0 = 0; b0 < nb; b0 += 32) {
         const int nbk = min(32, nb - b0), kb = b0 + lane;
         if (ST) {
-            F.store(stage[threadIdx.x >> 5]);
-            if (b0 + 32 < nb) F.load(w, b0 + 32, min(32, nb - b0 - 32));
+#pragma unroll
+            for (int r = 0; r < RW; ++r) {
+                F[r].store(stage[warp * RW + r]);
+                if (b0 + 32 < nb) F[r].load(w[r], b0 + 32, min(32, nb - b0 - 32));
+            }
         }
         if (lane >= nbk) continue;
-        int v[8];
-        const float dw = ST ? q8_words_s(stage[threadIdx.x >> 5], lane, v) : q8_words_g(w + (size_t) kb * kQ8Bytes, v);
+        int v[RW][8];
+        float dw[RW];
+#pragma unroll
+        for (int r = 0; r < RW; ++r)
+            dw[r] = ST ? q8_words_s(stage[warp * RW + r], lane, v[r]) : q8_words_g(w[r] + (size_t) kb * kQ8Bytes, v[r]);
 #pragma unroll
         for (int c = 0; c < NC; ++c)
             if (c < b.ncol) {
                 const int4* xp = (const int4*) (b.xq + (size_t) c * b.k + (size_t) kb * 32);
                 const int4 xa = xp[0], xb = xp[1];
-                int sum = __dp4a(v[0], xa.x, 0);
-                sum = __dp4a(v[1], xa.y, sum);
-                sum = __dp4a(v[2], xa.z, sum);
-                sum = __dp4a(v[3], xa.w, sum);
-                sum = __dp4a(v[4], xb.x, sum);
-                sum = __dp4a(v[5], xb.y, sum);
-                sum = __dp4a(v[6], xb.z, sum);
-                sum = __dp4a(v[7], xb.w, sum);
-                acc[c] = fmaf(dw * b.xd[(size_t) c * nb + kb], (float) sum, acc[c]);
+                const float xs = b.xd[(size_t) c * nb + kb];
+#pragma unroll
+                for (int r = 0; r < RW; ++r) {
+                    int sum = __dp4a(v[r][0], xa.x, 0);
+                    sum = __dp4a(v[r][1], xa.y, sum);
+                    sum = __dp4a(v[r][2], xa.z, sum);
+                    sum = __dp4a(v[r][3], xa.w, sum);
+                    sum = __dp4a(v[r][4], xb.x, sum);
+                    sum = __dp4a(v[r][5], xb.y, sum);
+                    sum = __dp4a(v[r][6], xb.z, sum);
+                    sum = __dp4a(v[r][7], xb.w, sum);
+                    acc[r][c] = fmaf(dw[r] * xs, (float) sum, acc[r][c]);
+                }
             }
     }
 #pragma unroll
-    for (int c = 0; c < NC; ++c)
-        if (c < b.ncol) {
-            const float v = warp_sum(acc[c]);
-            if (lane == 0) b.y[c * b.ycs + row] = b.alpha * v + (b.bias != nullptr ? b.bias[row] : 0.0f);
-        }
+    for (int r = 0; r < RW; ++r)
+#pragma unroll
+        for (int c = 0; c < NC; ++c)
+            if (c < b.ncol) {
+                const float v = warp_sum(acc[r][c]);
+                if (lane == 0 && row0 + r < b.n)
+                    b.y[c * b.ycs + row0 + r] = b.alpha * v + (b.bias != nullptr ? b.bias[row0 + r] : 0.0f);
+            }
 }
 
 // grid (max rows / 8, jobs): bf16_mv_kernel for MXFP4 (Q8 false) or Q8_0 (Q8 true) matrices - a lane a 32-value block
@@ -1203,8 +1226,10 @@ void mv_launch(int f, const BfJobs& J, int nj, int max_n, bool vec, cudaStream_t
         if (max_n > 0 && nj > 0 &&
             ::strata::dsv41::metal_host::mx_mv((const void*) &J, nj, max_n, sizeof(BfJob), 2)) return;
 #endif
-        if (vec) strata_ds4_launch(q8_mv_kernel<NC, true>, grid, kThreads, 0, s, J);
-        else strata_ds4_launch(q8_mv_kernel<NC, false>, grid, kThreads, 0, s, J);
+        if (vec) {
+            const dim3 g2((unsigned) ((max_n + kWarps * kQ8Rows<NC, true> - 1) / (kWarps * kQ8Rows<NC, true>)), (unsigned) nj);
+            strata_ds4_launch(q8_mv_kernel<NC, true>, g2, kThreads, 0, s, J);
+        } else strata_ds4_launch(q8_mv_kernel<NC, false>, grid, kThreads, 0, s, J);
     } else {
 #if defined(STRATA_METAL)
         // the BF16 matvec (vec: the rows and activations 16-byte aligned, so the 8-value step is safe)
