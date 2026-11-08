@@ -6,7 +6,7 @@
 # Build from the repository root:
 #   docker build --build-arg BASE=strata-mi50 -t strata-mi50-split -f deploy/mi50/Dockerfile.split .
 
-ARG BASE=strata-gfx906:0.2.10-mi50-vision
+ARG BASE=strata-gfx906:0.2.12-mi50-vision
 FROM ${BASE}
 
 COPY . /tmp/src

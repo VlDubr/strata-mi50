@@ -6,7 +6,7 @@
 # HSA_ENABLE_SDMA=1: --prompt-ring's copies go on the copy engines, beside the kernels.
 set -e
 NAME=strata-glm5
-IMAGE="${IMAGE:-strata-gfx906:0.2.10-mi50-glm5}"
+IMAGE="${IMAGE:-strata-gfx906:0.2.12-mi50-glm5}"
 for other in strata-mi50 strata-split; do
   if [ "$(docker inspect -f '{{.State.Running}}' "$other" 2>/dev/null)" = "true" ]; then
     echo "$other is running: stop it first (docker stop $other)" >&2

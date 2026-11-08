@@ -137,7 +137,7 @@ ninja -C build-glm5 strata-dsv41 glm5_kernels_test ds4_gguf_test ds4_iq_test ds4
 
 The main `strata` engine keeps its `STRATA_HIP_GFX906` build. `strata-dsv41` uses the wave64 `STRATA_ENABLE_HIP` backend.
 `Dockerfile.glm5` builds both from the same tree.
-Image: `docker build -t strata-gfx906:0.2.10-mi50-glm5 -f deploy/mi50/Dockerfile.glm5 .`
+Image: `docker build -t strata-gfx906:0.2.12-mi50-glm5 -f deploy/mi50/Dockerfile.glm5 .`
 
 ## Deployment
 

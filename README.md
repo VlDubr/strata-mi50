@@ -341,7 +341,7 @@ Build the [Qwen image](#1-build-the-image) first, then the GLM image over it. Th
 picture readers as its base; `BASE` selects another one.
 
 ```sh
-docker build --build-arg BASE=strata-mi50 -t strata-gfx906:0.2.10-mi50-glm5 -f deploy/mi50/Dockerfile.glm5 .
+docker build --build-arg BASE=strata-mi50 -t strata-gfx906:0.2.12-mi50-glm5 -f deploy/mi50/Dockerfile.glm5 .
 ```
 
 1. Put the GGUF files and `mmproj-BF16.gguf` in one folder, then write the pack with `tools/dsv41/pack_glm5.py`.

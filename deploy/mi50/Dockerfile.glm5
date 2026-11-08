@@ -4,9 +4,9 @@
 # (strata for Qwen, strata-dsv41 for GLM), so an image holds one source; docs/GLM5.md has the pack, the config and the numbers.
 #
 # Build from the repository root:
-#   docker build -t strata-gfx906:0.2.10-mi50-glm5 -f deploy/mi50/Dockerfile.glm5 .
+#   docker build -t strata-gfx906:0.2.12-mi50-glm5 -f deploy/mi50/Dockerfile.glm5 .
 
-ARG BASE=strata-gfx906:0.2.10-mi50-vision
+ARG BASE=strata-gfx906:0.2.12-mi50-vision
 FROM ${BASE}
 
 COPY . /tmp/src
