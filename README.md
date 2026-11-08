@@ -9,7 +9,7 @@
 
 <p align="center">
   Qwen3.8-Flash-Next on four MI50 32 GB cards:<br>
-  <b>83 tok/s</b> for one user, <b>170 tok/s</b> in total for ten users at once, up to <b>262,144 tokens</b> of context.<br>
+  <b>84 tok/s</b> for one user, <b>172 tok/s</b> in total for ten users at once, up to <b>262,144 tokens</b> of context.<br>
   GLM-5.3-Flash (320B) on the same cards: <b>36 tok/s</b>, <b>131,072 tokens</b> of context, four conversations, pictures.
 </p>
 
@@ -22,14 +22,14 @@
 <p align="center"><b>English</b> · <a href="README.ru.md">Русский</a></p>
 
 <p align="center">
-  <a href="https://github.com/Niko1221/Strata/releases/tag/v0.2.10"><img src="https://img.shields.io/badge/upstream-Strata_v0.2.10-0ab887" alt="Upstream Strata v0.2.10"></a>
+  <a href="https://github.com/Niko1221/Strata/releases/tag/v0.2.12"><img src="https://img.shields.io/badge/upstream-Strata_v0.2.12-0ab887" alt="Upstream Strata v0.2.12"></a>
   <img src="https://img.shields.io/badge/GPU-MI50_%2F_MI60_(gfx906)-ED1C24?logo=amd&logoColor=white" alt="AMD Instinct MI50 / MI60, gfx906">
   <img src="https://img.shields.io/badge/ROCm-10.0-ED1C24" alt="ROCm 10.0">
   <img src="https://img.shields.io/badge/context-262K_tokens-6f42c1" alt="262K-token context">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
 
-**Source version: Strata v0.2.10 / `ffa80d73`** · engine 0.1.56 · llama.cpp / ggml pin `3cf03257` ·
+**Source version: Strata v0.2.12 / `146df3c4`** · engine 0.1.58 · llama.cpp / ggml pin `3cf03257` ·
 branch [`mi50`](https://github.com/VlDubr/strata-mi50/tree/mi50)
 
 [Strata](https://github.com/Niko1221/Strata) runs large mixture-of-experts models on consumer and workstation GPUs.
@@ -51,7 +51,7 @@ architecture on ROCm 10, adds MI50-specific decode speed-ups that keep the outpu
 - **12 requests at once, full context.** On 4x MI50 32 GB: 12 batch slots in 4 pipelined groups, each conversation up
   to 262,144 tokens, all 24,576 experts in VRAM.
 - **Batch output equals solo output.** Eight greedy prompts give the same bytes one at a time and all at once.
-- **Current with upstream.** Upstream releases are merged through v0.2.10. Every conflict, check and measurement is
+- **Current with upstream.** Upstream releases are merged through v0.2.12. Every conflict, check and measurement is
   recorded in [docs/GFX906.md](docs/GFX906.md).
 - **Ready to deploy.** Dockerfile, launcher and a GPU clock service in [deploy/mi50/](deploy/mi50/).
 - **All cards on every layer.** A second engine for Qwen reaches 94-99 tok/s for one request over direct card-to-card stores.
@@ -61,7 +61,7 @@ architecture on ROCm 10, adds MI50-specific decode speed-ups that keep the outpu
 
 ## Performance
 
-**4x MI50 32 GB, Unsloth UD-Q5_K_XL, engine 0.1.51, 2026-10-26.** AMD EPYC 7302, 92 GB RAM, Ubuntu 26.04, ROCm 10.0
+**4x MI50 32 GB, Unsloth UD-Q5_K_XL, engine 0.1.58 (Strata v0.2.12), 2026-11-08.** AMD EPYC 7302, 92 GB RAM, Ubuntu 26.04, ROCm 10.0
 in the container, GPU DPM level `high`. Qwen3.8-Flash-Next, int8 KV cache, MTP speculative decoding, layer split
 12 / 24 / 36. Two profiles of the same model ([Quick start](#3-choose-a-profile)):
 
@@ -69,14 +69,14 @@ in the container, GPU DPM level `high`. Qwen3.8-Flash-Next, int8 KV cache, MTP s
 | --- | ---: | ---: |
 | Context per conversation | 131,072 | **262,144** |
 | Requests decoded together | 1 (others wait) | **12** |
-| Decode, 1 request | **83.3 tok/s** | 64.1 tok/s |
-| Decode, 4 at once, total | 78.1 tok/s | 118.6 tok/s |
-| Decode, 10 at once, total | 80.5 tok/s | **170.4 tok/s** |
-| Decode, 10 at once, each request | 84–105 tok/s, one after another | 17.4–26.4 tok/s, all together |
-| First token, 10 at once | 0.2–33.9 s | **0.3–6.3 s** |
-| Prefill, real | 1,061–1,064 tok/s (17.7K-token document) | 1,356 tok/s (115,982 tokens) · 1,118 tok/s (249,189 tokens) |
+| Decode, 1 request | **84.0 tok/s** | 64.9 tok/s |
+| Decode, 4 at once, total | 78.5 tok/s | 119.1 tok/s |
+| Decode, 10 at once, total | 78.6 tok/s | **172.3-181.9 tok/s** |
+| Decode, 10 at once, each request | 84–105 tok/s, one after another | 17.5–27.4 tok/s, all together |
+| First token, 10 at once | 0.2–35.3 s | **0.2–6.1 s** |
+| Prefill, real | 1,057–1,060 tok/s (17.7K-token document) | 1,072–1,075 tok/s (17.7K) · 1,309 tok/s (121,216 tokens) |
 | Prefill, effective | equal to real: no K/V reuse in these runs | equal to real: no K/V reuse in these runs |
-| Decode after the long prompt | — | 56.3 tok/s at 116K · 50.6 tok/s at 249K |
+| Decode after the long prompt | — | 54.5 tok/s at 121K · 50.3 tok/s at 253K |
 
 <details>
 <summary><b>How it was measured, and what was not</b></summary>
@@ -89,10 +89,15 @@ in the container, GPU DPM level `high`. Qwen3.8-Flash-Next, int8 KV cache, MTP s
   0). **Effective prefill** counts reused tokens too; with no reuse it equals the real rate. A warm turn that reuses
   K/V was not measured here.
 - **Exactness**: `eqcheck.py` gives 8 / 8 identical outputs one after another and all at once; the four fixed prompts of
-  the decode rounds keep their hashes.
+  the decode rounds keep their hashes. Against the v0.2.10 image, two interleaved runs of each profile gave the same hashes on all
+  four and decode within 0.5%.
+- **Rounds**: 10 at once in the parallel profile is two rounds; the other decode points are one round after a warm-up request.
+- **The 253K-token prompt** began with the 121K-token one, so the engine reused that part: its prefill rate is not shown.
+- **The deployed config** of this server adds the picture readers and has 8 slots instead of 12: 10 at once give 135 tok/s there.
 - **Memory**: the parallel profile uses 63 of 91 GB host RAM (the K/V windows are pinned), and all experts stay in VRAM.
 - **Not measured**: sampled decoding, more than one round per point, long soak, MI60, other models.
-- Raw results and scripts: [docs/gfx906-results/20261026-mi50x4-parallel](docs/gfx906-results/20261026-mi50x4-parallel/README.md).
+- The v0.2.12 checks: [docs/GFX906.md](docs/GFX906.md#upstream-v0212-synchronization-2026-11-08). The 2026-10-26 round, with raw results
+  and scripts: [docs/gfx906-results/20261026-mi50x4-parallel](docs/gfx906-results/20261026-mi50x4-parallel/README.md).
   Solo-profile prefill: the v0.2.6 merge check of the same day in [docs/GFX906.md](docs/GFX906.md#upstream-v026-synchronization-2026-10-26).
 
 </details>
@@ -156,8 +161,8 @@ that setup wrote (`api_key`, `tokenizer`, `log` and so on).
 
 | Profile | Use it for | One request | Ten at once |
 | --- | --- | ---: | ---: |
-| **Parallel** (the tested deployment) | several users, agents, batch jobs | 64 tok/s | 170 tok/s total |
-| **Solo** | one user who wants the fastest single answer | 83 tok/s | 80 tok/s total, queued |
+| **Parallel** (the tested deployment) | several users, agents, batch jobs | 65 tok/s | 172 tok/s total |
+| **Solo** | one user who wants the fastest single answer | 84 tok/s | 79 tok/s total, queued |
 
 **Parallel profile:**
 
@@ -262,18 +267,18 @@ For Qwen3.8-Flash-Next there is a third way to run the model: `strata-split` giv
 read weights at once instead of one at a time. It answers one person faster than either profile above. The layer split still wins for
 many users and long contexts.
 
-**4x MI50 32 GB, UD-Q5_K_XL, 2026-11-07.** The layer split's rows for 4 and 10 requests are from [Performance](#performance); the rest were
-measured on this day with the fixed greedy prompts.
+**4x MI50 32 GB, UD-Q5_K_XL, 2026-11-07 and 2026-11-08 (Strata v0.2.12).** The layer split's rows for 4 and 10 requests are from
+[Performance](#performance). The rest are the fixed greedy prompts; a range covers the runs of both days.
 
 | | Layer split, solo | Layer split, parallel | All-cards split |
 | --- | ---: | ---: | ---: |
 | Context per conversation | 131,072 | **262,144** | 131,072 |
-| Decode, 1 request | 86 tok/s | 63 tok/s | **94-99 tok/s** |
-| Decode, 4 at once, total | 78 tok/s | **119 tok/s** | 105-120 tok/s |
-| Decode, 8 at once, total | not measured | not measured | 120 tok/s |
-| Decode, 10 at once, total | 81 tok/s | **170 tok/s** | at most 8 slots |
-| Prefill, 17.7K tokens | **1,070 tok/s** | **1,070 tok/s** | 770-900 tok/s |
-| Load | about 3 min | about 3 min | about 1.5 min |
+| Decode, 1 request | 87 tok/s | 63 tok/s | **94-99 tok/s** |
+| Decode, 4 at once, total | 79 tok/s | **119 tok/s** | 88-120 tok/s |
+| Decode, 8 at once, total | not measured | not measured | 100-120 tok/s |
+| Decode, 10 at once, total | 79 tok/s | **172 tok/s** | at most 8 slots |
+| Prefill, 17.7K tokens | **1,060 tok/s** | **1,073 tok/s** | 770-900 tok/s |
+| Load | 2-3 min | 2-3 min | 1-2.5 min |
 
 Pictures work. On 17 checked prompts the answers were right as often as the layer split's, and 11 were identical to the character. Three
 fresh starts under load gave the same answers and no stall.
@@ -300,7 +305,7 @@ GLM-5.3-Flash (GGUF architecture `glm5-next`, 320B parameters, 288 experts) runs
 (`strata-dsv41`), built for gfx906. The model does not fit in 128 GB of VRAM: the most-used experts stay on the cards and the
 rest run on the CPU from RAM. Its image holds both engines, and only one model runs at a time.
 
-**4x MI50 32 GB, Unsloth UD-Q4_K_XL (199.7 GB), 2026-11-07.** AMD EPYC 7302, six DDR4-3200 DIMMs, 91 GB RAM, context 131,072,
+**4x MI50 32 GB, Unsloth UD-Q4_K_XL (199.7 GB), 2026-11-08, Strata v0.2.12.** AMD EPYC 7302, six DDR4-3200 DIMMs, 91 GB RAM, context 131,072,
 four conversations, multi-token head with two drafts, picture tower on. Sampled at the model card's settings, API rates.
 
 | | llama.cpp b11786 | Strata |
@@ -308,10 +313,10 @@ four conversations, multi-token head with two drafts, picture tower on. Sampled 
 | Decode, one answer | 10.8 tok/s | **36 tok/s** |
 | Decode, two answers at once, total | not measured | 31 tok/s |
 | Decode, four answers at once, total | not measured | 37 tok/s |
-| Prefill, 14K tokens | not measured | **192 tok/s** |
-| Prefill, 28K tokens | not measured | 190 tok/s |
+| Prefill, 14K tokens | not measured | **183-192 tok/s** |
+| Prefill, 28K tokens | not measured | 185-191 tok/s |
 | 14K-token prompt with a new end, from a restore point | not measured | 10 s instead of 180 s |
-| Load | about 14 min | about 2.5 min |
+| Load | about 14 min | about 3 min |
 
 Prefill is measured with `--prompt-ring 16`: a prompt's experts that are not in VRAM go to the cards over PCIe
 instead of being computed on the CPU. Without it, 14K tokens read at 78 tok/s. [docs/GLM5.md](docs/GLM5.md#prompts) has the details.
@@ -457,7 +462,7 @@ flowchart LR
 - **Upstream merges** are reviewed merge commits, never a rebase. In a conflict the fork's gfx906 behaviour wins and is
   rebuilt on upstream's new structure; each conflict and the post-merge checks are recorded in
   [docs/GFX906.md](docs/GFX906.md). Merged so far: v0.1.30 (the original port) through v0.2.0-beta+, v0.2.3.1,
-  v0.2.6 and v0.2.10.
+  v0.2.6, v0.2.10 and v0.2.12.
 
 ### Status and limits
 
