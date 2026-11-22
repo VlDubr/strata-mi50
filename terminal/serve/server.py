@@ -1425,7 +1425,24 @@ class StrataEngine:
             if ids:
                 # only these ids are printed; the engine's comma-separated list, renormalised below
                 keys += " allowed=" + ",".join(str(i) for i in ids)
-        return keys + StrataEngine.projection_key(sampling) + bias_api.engine_key(sampling.get("logit_bias"))
+        return (keys + StrataEngine.restore_keys(sampling) + StrataEngine.projection_key(sampling)
+                + bias_api.engine_key(sampling.get("logit_bias")))
+
+    @staticmethod
+    def restore_keys(sampling: dict) -> str:
+        """`marks=<pos>,...`, `tail=<pos>` and `shared=<pos>`: the DeepSeek engine's restore points for this prompt
+        (Service.prepare puts them in `_restore` with STRATA_DS4_RESTORE_POINTS; no other engine gets them).  "" without:
+        the line as before."""
+        pts = sampling.get("_restore")
+        if not isinstance(pts, dict):
+            return ""
+
+        def pos(v):
+            return isinstance(v, int) and not isinstance(v, bool) and v > 0
+        marks = [p for p in pts.get("marks") or () if pos(p)]
+        tail, shared = pts.get("tail"), pts.get("shared")
+        return ((" marks=" + ",".join(str(p) for p in marks) if marks else "") +
+                (f" tail={tail}" if pos(tail) else "") + (f" shared={shared}" if pos(shared) else ""))
 
     @staticmethod
     def projection_key(sampling: dict) -> str:
@@ -4385,6 +4402,8 @@ class Service:
                 value = req.get(alias)
         if value is None:
             value = self.reasoning_budget_tokens
+            if not value and self.family == "deepseek41" and not self.reasoning_budget_configured:
+                value = DS41_DEFAULT_BUDGET          # DeepSeek-V4.1 only, as Maya ships it: no budget anywhere = this one
         if isinstance(value, float) and value.is_integer():
             value = int(value)
         if isinstance(value, bool) or not isinstance(value, int):
@@ -5593,6 +5612,14 @@ class Service:
             # A request with a budget of its own, or max_tokens below ANSWER_ROOM_MIN_CAP, is left as it was.
             budget = max_new - min(max(ANSWER_RESERVE_MIN, max_new // 4), max_new // 2)
             if max_new <= 32768: print(f"[strata] thinking limited to {budget} of max_tokens {max_new} so the answer has room "
+                  "(\"answer_room\": false in the config turns this off)", flush=True)
+        if (thinking and not budget and self.answer_room and self.family == "deepseek41"
+                and max_new and DS41_SMALL_CAP_MIN <= max_new < ANSWER_ROOM_MIN_CAP):
+            # DeepSeek-V4.1 only: a short max_tokens (/v1/messages and /v1/chat/completions with 200-600) was spent
+            # entirely on the thinking, so no text block ever arrived.  With no budget of the client's own, the thinking
+            # is capped at half of max_tokens; then the wrap-up, </think> and the answer follow in the other half.
+            budget = max_new // 2
+            print(f"[strata] thinking limited to {budget} of max_tokens {max_new} so the answer has room "
                   "(\"answer_room\": false in the config turns this off)", flush=True)
         if budget and max_new and max_new > 0:
             # #984: a budget at or near max_tokens never fires before the reply is cut off while still thinking, so
@@ -8725,6 +8752,10 @@ def _main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> i
             tok = ST.Tokenizer(tokens, merges, types, tcfg.get("pre") or "qwen35", tcfg.get("special_ids") or None)
         except ST.UnknownPreTokenizer as e:             # a model with its own splitting rule: stop here, never split with another's
             ap.error(f"the model's tokenizer ({tpath}): {e}")
+    if a.engine == "strata" and not cfg.get("arch") and arch_from_tokenizer(None, tcfg.get("pre")):
+        cfg["arch"] = arch_from_tokenizer(None, tcfg.get("pre"))
+        print(f"[strata] the config names no \"arch\" and this tokenizer is DeepSeek's: serving it as {cfg['arch']} (its end token, DSML tool "
+              f"calls and effort words); add \"arch\": \"{cfg['arch']}\" to the config to say it outright", flush=True)
     hub = hub_from_config(cfg, a.mcp_config)            # before the minutes of loading: a bad entry stops here
     if a.offline and (hub is not None or cfg.get("before_load") or a.before_load):
         ap.error("--offline requires MCP servers and before_load commands to be disabled in this profile")
