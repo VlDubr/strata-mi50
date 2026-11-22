@@ -93,7 +93,7 @@ class Selection(unittest.TestCase):
                 eng = setup.build_engine_hip(gpu, Path("ggml"), experimental_gfx906=True)
             options = build.call_args.args[3]
             self.assertIn("-DCMAKE_HIP_ARCHITECTURES=gfx1201;gfx906", options)
-            self.assertIn("-DSTRATA_EXPERIMENTAL_GFX906=ON", options)
+            self.assertIn("-DSTRATA_HIP_GFX906=ON", options)
             meta = json.loads((eng / "BUILD.json").read_text())
             self.assertEqual(meta["archs"], ["gfx1201", "gfx906"])
             self.assertIs(meta["experimental_gfx906"], True)
@@ -226,7 +226,7 @@ class StorageAndRanges(unittest.TestCase):
         response.__enter__.return_value = response
         response.status = 200
         response.headers = {}
-        with patch.object(mtp.urllib.request, "urlopen", return_value=response):
+        with patch.object(mtp.netpolicy, "urlopen", return_value=response):
             with self.assertRaisesRegex(IOError, "did not honor"):
                 mtp.get(mtp.REPO+"shard", 0, 7, retries=1)
         response.read.assert_not_called()
@@ -235,7 +235,7 @@ class StorageAndRanges(unittest.TestCase):
         response = io.BytesIO(b"data")
         response.status = 206
         response.headers = {"Content-Range": "bytes 8-11/100"}
-        with patch.object(mtp.urllib.request, "urlopen", return_value=response):
+        with patch.object(mtp.netpolicy, "urlopen", return_value=response):
             self.assertEqual(mtp.get(mtp.REPO+"shard", 8, 11, retries=1), b"data")
 
     def test_oversized_safetensors_header(self):

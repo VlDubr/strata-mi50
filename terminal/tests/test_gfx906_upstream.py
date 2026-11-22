@@ -1,6 +1,6 @@
 """CPU-only upstream-sync regressions. No real HIP build, GPU launch or model download.
 
-Run: .venv/bin/python -m unittest discover -s tests -p 'test_gfx906*.py'
+Run: .venv/bin/python -m unittest discover -s terminal/tests -p 'test_gfx906*.py'
 """
 import contextlib
 import io
@@ -25,12 +25,12 @@ RDNA = dict(index=2, arch="gfx1201", name="RDNA4", vram_gb=48.0, vendor="amd")
 
 class UpstreamIntegration(unittest.TestCase):
     def test_version_and_acceptance_pins(self):
-        self.assertEqual(setup.source_version(), "0.1.56")   # engine string of the merged source (v0.2.10)
+        self.assertEqual(setup.source_version(), "0.1.65")   # engine string of the merged source (v0.2.19)
         self.assertEqual(setup.MIN_ENGINE, (0, 1, 46))
         self.assertEqual(setup.LLAMA_CPP_COMMIT, "3cf03257f219afbe7334045ff7c6a06ac68c627d")
         self.assertEqual(setup.HF_REVISIONS[gfx906_model.REPO], gfx906_model.REVISION)
         self.assertEqual(mtp_fetch.REVISION, "de4b8e4d43b917e7706784d8bb445c9af86a3540")
-        self.assertNotIn("gfx906", setup.AMD_ARCHS)
+        self.assertIn("gfx906", setup.AMD_ARCHS)
         self.assertNotIn("gfx906", setup.ROCM_INDEXES)
 
     def test_upstream_parser_preserves_gfx906_opt_in_and_order(self):
@@ -117,7 +117,7 @@ class UpstreamIntegration(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 setup.build_engine_hip(CARDS[0], Path("unused"), experimental_gfx906=True)
             build.assert_called_once()
-            self.assertIn("-DSTRATA_EXPERIMENTAL_GFX906=ON", build.call_args.args[3])
+            self.assertIn("-DSTRATA_HIP_GFX906=ON", build.call_args.args[3])
             self.assertIs(json.loads((engine / "BUILD.json").read_text())["experimental_gfx906"], True)
 
 
@@ -125,7 +125,7 @@ class UpstreamIntegration(unittest.TestCase):
 class CmakeArchitectureGate(unittest.TestCase):
     """Execute only the architecture gate, stopping BEFORE enable_language(HIP)/SDK discovery."""
     def check_archs(self, archs, experimental=False):
-        prefix = (ROOT / "cmake/hip_backend.cmake").read_text().split("enable_language(HIP)", 1)[0]
+        prefix = (ROOT.parent / "engine/cmake/hip_backend.cmake").read_text().split("enable_language(HIP)", 1)[0]
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / "gate.cmake"
             script.write_text('cmake_minimum_required(VERSION 3.24)\n'
