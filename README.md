@@ -9,7 +9,7 @@
 
 <p align="center">
   Qwen3.8-Flash-Next on four MI50 32 GB cards:<br>
-  <b>84 tok/s</b> for one user, <b>172 tok/s</b> in total for ten users at once, up to <b>262,144 tokens</b> of context.<br>
+  <b>84 tok/s</b> for one user, <b>117–121 tok/s</b> in total for ten users at once, up to <b>262,144 tokens</b> of context.<br>
   GLM-5.3-Flash (320B) on the same cards: <b>36 tok/s</b>, <b>131,072 tokens</b> of context, four conversations, pictures.
 </p>
 
@@ -61,44 +61,41 @@ architecture on ROCm 10, adds MI50-specific decode speed-ups that keep the outpu
 
 ## Performance
 
-**4x MI50 32 GB, Unsloth UD-Q5_K_XL, engine 0.1.58 (Strata v0.2.12), 2026-11-08.** AMD EPYC 7302, 92 GB RAM, Ubuntu 26.04, ROCm 10.0
+**4x MI50 32 GB, Unsloth UD-Q5_K_XL, engine 0.1.65 (Strata v0.2.19), 2026-11-23.** AMD EPYC 7302, 107 GB RAM, Ubuntu, ROCm 10.0
 in the container, GPU DPM level `high`. Qwen3.8-Flash-Next, int8 KV cache, MTP speculative decoding, layer split
-12 / 24 / 36. Two profiles of the same model ([Quick start](#3-choose-a-profile)):
+12 / 24 / 36, 8 batch slots with the picture readers. The deployed config adds `STRATA_PW_WITH_BATCH=1`,
+`STRATA_PIPED_MTP=1` and `--batch-mtp` to the parallel profile below:
 
-| | Solo profile | Parallel profile |
-| --- | ---: | ---: |
-| Context per conversation | 131,072 | **262,144** |
-| Requests decoded together | 1 (others wait) | **12** |
-| Decode, 1 request | **84.0 tok/s** | 64.9 tok/s |
-| Decode, 4 at once, total | 78.5 tok/s | 119.1 tok/s |
-| Decode, 10 at once, total | 78.6 tok/s | **172.3-181.9 tok/s** |
-| Decode, 10 at once, each request | 84–105 tok/s, one after another | 17.5–27.4 tok/s, all together |
-| First token, 10 at once | 0.2–35.3 s | **0.2–6.1 s** |
-| Prefill, real | 1,057–1,060 tok/s (17.7K-token document) | 1,072–1,075 tok/s (17.7K) · 1,309 tok/s (121,216 tokens) |
-| Prefill, effective | equal to real: no K/V reuse in these runs | equal to real: no K/V reuse in these runs |
-| Decode after the long prompt | — | 54.5 tok/s at 121K · 50.3 tok/s at 253K |
+| | Deployed (8 slots, tuned) |
+| --- | ---: |
+| Context per conversation | **262,144** |
+| Decode, 1 request | **84.3 tok/s** (chat 87.0 · code 85.7 · story 80.2) |
+| Decode after a 17.7K-token prompt | 84.7 tok/s |
+| Decode, 10 at once, total | **117.1–120.5 tok/s** |
+| Prefill, real | 1,187 tok/s (17.7K-token document, `cached_tokens` 0) |
+| Prefill, effective | equal to real: no K/V reuse in these runs |
 
 <details>
 <summary><b>How it was measured, and what was not</b></summary>
 
-- **Decode rows**: `par.py N` sends N different Russian prompts at once (greedy, streaming, 300 tokens each). *Total* is
-  all output tokens divided by the wall time from the first send to the last token. *Each request* is one request's
-  tokens after its first, divided by its own streaming time. *First token* includes the time spent in the queue.
-- **Real prefill**: new prompt tokens per second of prompt processing, from the engine's own `/metrics` record. The
-  server restarted before each run, and no earlier request shared the prompt, so nothing was reused (`cached_tokens`
-  0). **Effective prefill** counts reused tokens too; with no reuse it equals the real rate. A warm turn that reuses
-  K/V was not measured here.
-- **Exactness**: `eqcheck.py` gives 8 / 8 identical outputs one after another and all at once; the four fixed prompts of
-  the decode rounds keep their hashes. Against the v0.2.10 image, two interleaved runs of each profile gave the same hashes on all
-  four and decode within 0.5%.
-- **Rounds**: 10 at once in the parallel profile is two rounds; the other decode points are one round after a warm-up request.
-- **The 253K-token prompt** began with the 121K-token one, so the engine reused that part: its prefill rate is not shown.
-- **The deployed config** of this server adds the picture readers and has 8 slots instead of 12: 10 at once give 135 tok/s there.
-- **Memory**: the parallel profile uses 63 of 91 GB host RAM (the K/V windows are pinned), and all experts stay in VRAM.
-- **Not measured**: sampled decoding, more than one round per point, long soak, MI60, other models.
-- The v0.2.12 checks: [docs/GFX906.md](docs/GFX906.md#upstream-v0212-synchronization-2026-11-08). The 2026-10-26 round, with raw results
-  and scripts: [docs/gfx906-results/20261026-mi50x4-parallel](docs/gfx906-results/20261026-mi50x4-parallel/README.md).
-  Solo-profile prefill: the v0.2.6 merge check of the same day in [docs/GFX906.md](docs/GFX906.md#upstream-v026-synchronization-2026-10-26).
+- **Solo decode**: four fixed greedy prompts (chat/code/story 500 tokens, a 17.7K-token document 200 tokens), each with
+  a per-run nonce prefix so the conversation cache cannot reuse K/V. The mean of chat/code/story is 84.28 tok/s;
+  decode and prefill come from the engine's own `/metrics` row. Without `STRATA_PW_WITH_BATCH=1` the same workload
+  gives 62.85 tok/s (the batch slots turn the solo path's pipeline overlap off); the flag keeps it on: +33%.
+- **10 at once**: `par_bench.py 10` sends 10 different prompts at once (greedy, streaming, 300 tokens each), two
+  interleaved rounds against the stock config: 117.1/120.5 tuned vs 113.9/113.5 stock (+3–6%). *Total* is all output
+  tokens divided by the wall time from the first send to the last token.
+- **Real prefill**: new prompt tokens per second of prompt processing (`prompt_read / prompt_ms`), `cached_tokens` 0.
+  **Effective prefill** counts reused tokens too; with no reuse it equals the real rate.
+- **Exactness**: not asserted across variants this round (the nonce prefix changes the prompt, so hashes differ by
+  design). The v0.2.12 merge's `eqcheck.py` 8/8 parity was measured without nonces.
+- **Not measured**: sampled decoding, more than two rounds per point, long soak, MI60, other models, the split and
+  GLM images on v0.2.19.
+- The v0.2.19 checks and the tuning A/B, with raw payloads and harnesses:
+  [docs/gfx906-results/20261123-mi50x4-v0219](docs/gfx906-results/20261123-mi50x4-v0219/README.md) and
+  [docs/GFX906.md](docs/GFX906.md#upstream-v0219-synchronization-2026-11-22). The 2026-11-08 two-profile round
+  (solo 84.0 / parallel 172.3–181.9 tok/s, engine 0.1.58) is kept in
+  [docs/GFX906.md](docs/GFX906.md#upstream-v0212-synchronization-2026-11-08).
 
 </details>
 
@@ -106,7 +103,7 @@ in the container, GPU DPM level `high`. Qwen3.8-Flash-Next, int8 KV cache, MTP s
 
 ```mermaid
 flowchart LR
-    clients["Clients<br/>OpenAI and Anthropic API, web chat"] --> server["serve/server.py<br/>12 batch slots = 4 groups of 3"]
+    clients["Clients<br/>OpenAI and Anthropic API, web chat"] --> server["terminal/serve/server.py<br/>12 batch slots = 4 groups of 3"]
     server --> g0
     subgraph split["Layer split: each card owns 12 of the 48 layers"]
         direction LR
@@ -161,8 +158,12 @@ that setup wrote (`api_key`, `tokenizer`, `log` and so on).
 
 | Profile | Use it for | One request | Ten at once |
 | --- | --- | ---: | ---: |
-| **Parallel** (the tested deployment) | several users, agents, batch jobs | 65 tok/s | 172 tok/s total |
+| **Parallel** (the tested deployment) | several users, agents, batch jobs | 84 tok/s | 117–121 tok/s total |
 | **Solo** | one user who wants the fastest single answer | 84 tok/s | 79 tok/s total, queued |
+
+The parallel profile's `STRATA_PW_WITH_BATCH=1` keeps the solo path's pipeline overlap when batch slots are on
+(62.9 → 84.3 tok/s for one request); `STRATA_PIPED_MTP=1` with `--batch-mtp` gives each slot its own MTP draft
+state in the pipelined groups. Both were measured on v0.2.19 ([Performance](#performance)).
 
 **Parallel profile:**
 
@@ -184,9 +185,10 @@ that setup wrote (`api_key`, `tokenizer`, `log` and so on).
     "--max-context", "262144",
     "--kv-resident", "32768",
     "--trim-stage-weights",
-    "--resident-budget-gib", "24"
+    "--resident-budget-gib", "24",
+    "--batch-mtp"
   ],
-  "env": { "STRATA_MMQ_KQ": "1" },
+  "env": { "STRATA_PW_WITH_BATCH": "1", "STRATA_PIPED_MTP": "1" },
   "gpu": [0, 1, 2, 3],
   "layer_split": "12,24,36",
   "parallel": 12
@@ -267,7 +269,8 @@ For Qwen3.8-Flash-Next there is a third way to run the model: `strata-split` giv
 read weights at once instead of one at a time. It answers one person faster than either profile above. The layer split still wins for
 many users and long contexts.
 
-**4x MI50 32 GB, UD-Q5_K_XL, 2026-11-07 and 2026-11-08 (Strata v0.2.12).** The layer split's rows for 4 and 10 requests are from
+**4x MI50 32 GB, UD-Q5_K_XL, 2026-11-07 and 2026-11-08 (Strata v0.2.12, engine 0.1.58).** The layer split's rows for 4 and 10 requests are
+the v0.2.12 two-profile round ([docs/GFX906.md](docs/GFX906.md#upstream-v0212-synchronization-2026-11-08)); the v0.2.19 deployed numbers are in
 [Performance](#performance). The rest are the fixed greedy prompts; a range covers the runs of both days.
 
 | | Layer split, solo | Layer split, parallel | All-cards split |

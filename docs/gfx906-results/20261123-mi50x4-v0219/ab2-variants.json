@@ -1,0 +1,8 @@
+[
+  {"name": "stock0219", "env": {"STRATA_MMQ_KQ": null}, "args": {}},
+  {"name": "piped_mtp", "env": {"STRATA_MMQ_KQ": null, "STRATA_PIPED_MTP": "1"}, "args": {"--batch-mtp": ""}},
+  {"name": "pw_with_batch", "env": {"STRATA_MMQ_KQ": null, "STRATA_PW_WITH_BATCH": "1"}, "args": {}},
+  {"name": "piped_mtp_pw", "env": {"STRATA_MMQ_KQ": null, "STRATA_PIPED_MTP": "1", "STRATA_PW_WITH_BATCH": "1"}, "args": {"--batch-mtp": ""}},
+  {"name": "par12", "env": {"STRATA_MMQ_KQ": null}, "args": {}, "parallel": 12},
+  {"name": "piped_mtp_par12", "env": {"STRATA_MMQ_KQ": null, "STRATA_PIPED_MTP": "1"}, "args": {"--batch-mtp": ""}, "parallel": 12}
+]
