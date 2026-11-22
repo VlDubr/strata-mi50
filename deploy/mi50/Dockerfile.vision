@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1
+#
+# The picture readers beside the MI50 text engine: the CPU reader (the deployed config's vision.exe) and the
+# experimental gfx906 HIP reader, built the way terminal/setup.py's build_vision_hip() builds them.
+# Over the Qwen image, so one source tree holds the engine and the readers.
+#
+# Build from the repository root:
+#   docker build --build-arg BASE=strata-gfx906:0.2.19-mi50 -t strata-gfx906:0.2.19-mi50-vision -f deploy/mi50/Dockerfile.vision .
+
+ARG BASE=strata-gfx906:0.2.19-mi50
+FROM ${BASE}
+
+COPY . /tmp/src
+# the readers build from the fresh tree; the stamp and binaries land in the image's terminal/engine and
+# are copied to the legacy /opt/strata/engine path the configs name
+RUN PYTHONPATH=/tmp/src/terminal /opt/strata/.venv/bin/python - <<'PYEOF'
+import json, shutil, setup
+from pathlib import Path
+setup.ROOT = Path("/tmp/src/terminal")
+eng = Path("/opt/strata/terminal/engine")
+stamp = eng / "BUILD.json"
+meta = json.loads(stamp.read_text(encoding="utf-8"))
+setup.build_vision_hip(eng, stamp, meta, None, setup.source_hash(setup.VISION_SOURCES), ["gfx906"], "gpu")
+for exe in (setup.VEXE, setup.HVEXE):
+    if (eng / exe).exists():
+        shutil.copy2(eng / exe, Path("/opt/strata/engine") / exe)
+shutil.copy2(stamp, Path("/opt/strata/engine/BUILD.json"))
+print(stamp.read_text(encoding="utf-8"))
+PYEOF
+RUN rm -rf /tmp/src
