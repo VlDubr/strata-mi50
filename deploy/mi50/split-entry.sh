@@ -6,4 +6,4 @@ cd /opt/strata
 D="${STRATA_DATA:-/data}"
 CFG="${SPLIT_CONFIG:-$D/config/split.json}"
 [ -f "$CFG" ] || .venv/bin/python split-config.py "$D/config" "$CFG"
-exec .venv/bin/python serve/server.py --engine strata --config "$CFG" --host 0.0.0.0 --port "${PORT:-8080}"
+exec .venv/bin/python terminal/serve/server.py --engine strata --config "$CFG" --host 0.0.0.0 --port "${PORT:-8080}"

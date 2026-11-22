@@ -22,14 +22,14 @@
 <p align="center"><a href="README.md">English</a> · <b>Русский</b></p>
 
 <p align="center">
-  <a href="https://github.com/Niko1221/Strata/releases/tag/v0.2.12"><img src="https://img.shields.io/badge/upstream-Strata_v0.2.12-0ab887" alt="Upstream Strata v0.2.12"></a>
+  <a href="https://github.com/Niko1221/Strata/releases/tag/v0.2.19"><img src="https://img.shields.io/badge/upstream-Strata_v0.2.19-0ab887" alt="Upstream Strata v0.2.19"></a>
   <img src="https://img.shields.io/badge/GPU-MI50_%2F_MI60_(gfx906)-ED1C24?logo=amd&logoColor=white" alt="AMD Instinct MI50 / MI60, gfx906">
   <img src="https://img.shields.io/badge/ROCm-10.0-ED1C24" alt="ROCm 10.0">
   <img src="https://img.shields.io/badge/context-262K_tokens-6f42c1" alt="Контекст 262K токенов">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="Лицензия MIT"></a>
 </p>
 
-**Версия исходников: Strata v0.2.12 / `146df3c4`** · движок 0.1.58 · llama.cpp / ggml `3cf03257` ·
+**Версия исходников: Strata v0.2.19 / `c6f6427d`** · движок 0.1.65 · llama.cpp / ggml `3cf03257` ·
 ветка [`mi50`](https://github.com/VlDubr/strata-mi50/tree/mi50)
 
 [Strata](https://github.com/Niko1221/Strata) запускает большие модели с архитектурой mixture-of-experts на потребительских
@@ -52,7 +52,7 @@
 - **12 запросов одновременно на полном контексте.** На 4x MI50 32 ГБ: 12 слотов в 4 конвейерных группах, каждый диалог до
   262 144 токенов, все 24 576 экспертов в VRAM.
 - **Вывод в батче равен одиночному.** Восемь жадных промптов дают одни и те же байты и по одному, и все вместе.
-- **Актуальность с основным проектом.** Релизы влиты вплоть до v0.2.12. Каждый конфликт, проверка и замер записаны в
+- **Актуальность с основным проектом.** Релизы влиты вплоть до v0.2.19. Каждый конфликт, проверка и замер записаны в
   [docs/GFX906.md](docs/GFX906.md).
 - **Готово к развёртыванию.** Dockerfile, скрипт запуска и служба частот GPU лежат в [deploy/mi50/](deploy/mi50/).
 - **Все карты на каждый слой.** Второй движок для Qwen даёт 94–99 ток/с на один запрос за счёт прямой записи между картами.

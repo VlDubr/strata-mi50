@@ -22,26 +22,29 @@ COPY . .
 
 RUN python3 -m venv .venv \
     && .venv/bin/pip install --no-cache-dir --upgrade pip \
-    && .venv/bin/pip install --no-cache-dir -r requirements.txt
+    && .venv/bin/pip install --no-cache-dir -r terminal/requirements.txt
 
-# pinned llama.cpp source (ggml for the build, gguf-py for the pack tools)
-RUN .venv/bin/python -c "import setup; print(setup.get_llama_cpp())"
+# 0.2.19: no llama.cpp download any more; the engine builds against the vendored ggml at the fork's pin
+# (engine/third_party/strata-ggml, commit 3cf03257), so no -DSTRATA_GGML_DIR is needed.
 
-RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+RUN cmake -S engine -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
         -DSTRATA_HIP_GFX906=ON -DCMAKE_HIP_ARCHITECTURES=gfx906 \
-        -DSTRATA_PORTABLE=ON -DSTRATA_PREFILL_MMQ=OFF -DSTRATA_BUILD_TESTS=OFF \
+        -DSTRATA_PORTABLE=ON -DSTRATA_BUILD_TESTS=OFF \
         -DCMAKE_C_COMPILER=/usr/bin/cc -DCMAKE_CXX_COMPILER=/usr/bin/c++ \
         -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++ -DCMAKE_PREFIX_PATH=/opt/rocm \
-        -DSTRATA_GGML_DIR=/opt/strata/third_party/llama.cpp \
     && cmake --build build -j "$(nproc)" --target strata
 
 # Stamp the engine the way setup.py's build_engine_hip() does, so setup reuses it instead of building the
-# deprecated fork wave64 backend.
-RUN .venv/bin/python - <<'PYEOF'
+# deprecated fork wave64 backend. setup.py lives in terminal/ now: its ROOT is /opt/strata/terminal and it
+# stamps terminal/engine/. The build dir stays /opt/strata/build. The legacy deploy path /opt/strata/engine/
+# is the engine's source tree, so the binary is copied beside it too, for configs that still name it.
+RUN PYTHONPATH=terminal .venv/bin/python - <<'PYEOF'
 import json, shutil, setup
+from pathlib import Path
+root = Path("/opt/strata")
 eng = setup.ROOT / "engine"
 eng.mkdir(exist_ok=True)
-shutil.copy2(setup.ROOT / "build" / setup.EXE, eng / setup.EXE)
+shutil.copy2(root / "build" / setup.EXE, eng / setup.EXE)
 meta = {"source": "local-hip", "backend": "hip", "version": setup.source_version(), "archs": ["gfx906"],
         "experimental_gfx906": True, "vision": "none", "lib_dirs": ["/opt/rocm/lib"],
         "src": setup.source_hash(setup.ENGINE_SOURCES), "build": "STRATA_HIP_GFX906 (upstream gfx906 text engine)"}
@@ -49,8 +52,14 @@ floor = setup.cpu_floor(True)
 if floor:
     meta["isa_floor"] = floor
 (eng / "BUILD.json").write_text(json.dumps(meta, indent=1))
+legacy = root / "engine"
+shutil.copy2(eng / setup.EXE, legacy / setup.EXE)
+shutil.copy2(eng / "BUILD.json", legacy / "BUILD.json")
 print(meta)
 PYEOF
+
+# data/ moved into terminal/; keep the old /opt/strata/data path working for configs and docs
+RUN ln -s terminal/data /opt/strata/data
 
 RUN rm -rf build
 

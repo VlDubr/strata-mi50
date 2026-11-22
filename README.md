@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="apps/host/public/brand/strata-lockup-dark.svg">
-    <img src="apps/host/public/brand/strata-lockup-light.svg" alt="Strata" width="300">
+    <source media="(prefers-color-scheme: dark)" srcset="app/host/public/brand/strata-lockup-dark.svg">
+    <img src="app/host/public/brand/strata-lockup-light.svg" alt="Strata" width="340">
   </picture>
 </p>
 
@@ -22,14 +22,14 @@
 <p align="center"><b>English</b> · <a href="README.ru.md">Русский</a></p>
 
 <p align="center">
-  <a href="https://github.com/Niko1221/Strata/releases/tag/v0.2.12"><img src="https://img.shields.io/badge/upstream-Strata_v0.2.12-0ab887" alt="Upstream Strata v0.2.12"></a>
+  <a href="https://github.com/Niko1221/Strata/releases/tag/v0.2.19"><img src="https://img.shields.io/badge/upstream-Strata_v0.2.19-0ab887" alt="Upstream Strata v0.2.19"></a>
   <img src="https://img.shields.io/badge/GPU-MI50_%2F_MI60_(gfx906)-ED1C24?logo=amd&logoColor=white" alt="AMD Instinct MI50 / MI60, gfx906">
   <img src="https://img.shields.io/badge/ROCm-10.0-ED1C24" alt="ROCm 10.0">
   <img src="https://img.shields.io/badge/context-262K_tokens-6f42c1" alt="262K-token context">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
 
-**Source version: Strata v0.2.12 / `146df3c4`** · engine 0.1.58 · llama.cpp / ggml pin `3cf03257` ·
+**Source version: Strata v0.2.19 / `c6f6427d`** · engine 0.1.65 · llama.cpp / ggml pin `3cf03257` ·
 branch [`mi50`](https://github.com/VlDubr/strata-mi50/tree/mi50)
 
 [Strata](https://github.com/Niko1221/Strata) runs large mixture-of-experts models on consumer and workstation GPUs.
@@ -51,7 +51,7 @@ architecture on ROCm 10, adds MI50-specific decode speed-ups that keep the outpu
 - **12 requests at once, full context.** On 4x MI50 32 GB: 12 batch slots in 4 pipelined groups, each conversation up
   to 262,144 tokens, all 24,576 experts in VRAM.
 - **Batch output equals solo output.** Eight greedy prompts give the same bytes one at a time and all at once.
-- **Current with upstream.** Upstream releases are merged through v0.2.12. Every conflict, check and measurement is
+- **Current with upstream.** Upstream releases are merged through v0.2.19. Every conflict, check and measurement is
   recorded in [docs/GFX906.md](docs/GFX906.md).
 - **Ready to deploy.** Dockerfile, launcher and a GPU clock service in [deploy/mi50/](deploy/mi50/).
 - **All cards on every layer.** A second engine for Qwen reaches 94-99 tok/s for one request over direct card-to-card stores.

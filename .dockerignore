@@ -2,16 +2,20 @@
 # first start (inside the container or on the /data volume).
 .git
 
-# local Python environment (rebuilt in the image)
+# local Python environments (rebuilt in the image)
 .venv/
+/terminal/.venv/
 __pycache__/
 *.pyc
 .pytest_cache/
 
-# setup.py outputs and downloads (engine, packs, models, logs)
-/engine/
+# setup.py outputs, native build trees and downloads (packs, models, logs)
 /build/
 /build*/
+/terminal/build/
+/terminal/build*/
+/engine/build/
+/engine/build*/
 /dist/
 /packs/
 /mtp/
@@ -24,6 +28,8 @@ __pycache__/
 /data/Strata-data/
 third_party/llama.cpp/
 third_party/*.zip
+*.exe
+*.dll
 *.done
 *.log
 strata-*.json
