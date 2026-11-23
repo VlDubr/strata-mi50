@@ -130,3 +130,12 @@ node_modules/
 /terminal/.venv-build/
 /.venv-build/
 /engine-feed/
+
+# this fork's local artifacts, never part of the source:
+# setup.py keeps the replaced engine in eng/.previous for a way back (terminal/setup.py PREVIOUS_ENGINE)
+/engine/.previous/
+/terminal/engine/.previous/
+# the pinned llama.cpp checkout the preparation tools download (the build uses the vendored strata-ggml)
+/third_party/llama.cpp/
+# graphify knowledge-graph caches (local analysis output, not project documents)
+graphify-out/
